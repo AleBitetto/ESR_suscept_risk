@@ -106,7 +106,7 @@ force_remove_variable = c('rain', 'temp', 'var1', 'bcrisis', 'ehr1', 'ehr2', 'eh
   # select perimeter - first select years, then countries by perc and finally variables by perc
   years = c(2010:2019)
   country_max_perc = 40
-  variable_max_perc = 40
+  variable_max_perc = 45
   
   df_perim = df_orig %>%
     gather('variable', 'val', -c(year, country)) %>%
@@ -168,12 +168,26 @@ corr_thresh = 0.4
   cat('\n--- full set variables:', ncol(df) - 2)
   cat('\n--- full set variables:', ncol(df) - 2 - length(var_to_remove), '\n\n')
 }
+restricted_df_var = c('growth', 'interest1', 'labor1', 'penn19', 'penn32', 'penn33', 'penn42',
+                           'religdiv1', 'religdiv2', 'chrs_pct', 'musl_pct',
+                           df %>% select(starts_with("var")) %>% colnames(),
+                           df %>% select(starts_with("health")) %>% colnames(),
+                           df %>% select(starts_with("hef")) %>% colnames(),
+                           df %>% select(starts_with("pop")) %>% colnames())
+restricted_df_var = setdiff(restricted_df_var, c('health3', 'pop1', 'pop2', 'pop3', 'var8'))
+
 
 ### recover missing data
 dummy_var = c()#c('bcrisis')    # apply median
 recov_method_set = c('SOFT_IMPUTE', 'TENSOR_BF', 'FULL_AVERAGE')#, 'COUNTRY_AVERAGE')#,'NIPALS')
 df_set = c('Original', 'Restricted')  # "Restricted" is without multicollinearity
 {
+  # save variable description for Restricted dataset
+  lab_table = read.csv("Variable_description.csv", sep=";", stringsAsFactors=FALSE) %>%
+    filter(var %in% (df %>% select(country, year, all_of(restricted_df_var)) %>% colnames()))
+  write.table(lab_table, 'Variable_description_Restricted_Dataset.csv', sep = ';', row.names = F)
+  
+  
   res_recov = c()
   year_match = data.frame(year = unique(df$year)) %>% arrange(year) %>% mutate(CODE = c(1:n()))
   sink(paste0('./Log/Recov_missing_log_', format(Sys.time(), "%Y-%m-%dT%H%M"), '.txt'), append = F, split = T, type = 'output')
@@ -184,7 +198,7 @@ df_set = c('Original', 'Restricted')  # "Restricted" is without multicollinearit
       
       df_t = c()
       if (df_type == 'Original'){df_t = df}
-      if (df_type == 'Restricted'){df_t = df %>% select(-all_of(var_to_remove))}
+      if (df_type == 'Restricted'){df_t = df %>% select(country, year, all_of(restricted_df_var))}#{df_t = df %>% select(-all_of(var_to_remove))}
       
       # recover missing year by year
       if (recov_met %in% c('SOFT_IMPUTE', 'NIPALS')){
@@ -535,7 +549,7 @@ df_final = readRDS('./Checkpoints/df_final.rds')
 ### PCA and robust PCA
 cv_eval = F # to Cross-Validate PCA for suggested number of PC
 k_fold = 3
-pca_met_set = c('PCA', 'RobPCA', 'RobSparPCA')
+pca_met_set = c('PCA', 'RobPCA')#, 'RobSparPCA')
 dummy_var = c()#c('bcrisis')    # don't scale
 {
   year_set = c(sort(unique(df_final$year)))#, 'Concat')
@@ -660,11 +674,11 @@ dummy_var = c()#c('bcrisis')    # don't scale
   cat("\n\n+++++++++++++++++++++", format(Sys.time(), "%Y-%m-%d - %H:%M:%S"),"+++++++++++++++++++++\n\n")
   sink()
   
-  sparseness_stats = sparseness_count %>%
-    mutate(PC = paste0('PC', formatC(PC, width = 2, format = "d", flag = "0"))) %>%
-    spread(PC, ZERO_ELEM) %>%
-    arrange(desc(data), method, year)
-  write.table(sparseness_stats, "./Stats/2_PCA_Sparseness_count.csv", sep = ";", col.names = T, row.names = F, append = F, dec = ".")
+  # sparseness_stats = sparseness_count %>%
+  #   mutate(PC = paste0('PC', formatC(PC, width = 2, format = "d", flag = "0"))) %>%
+  #   spread(PC, ZERO_ELEM) %>%
+  #   arrange(desc(data), method, year)
+  # write.table(sparseness_stats, "./Stats/2_PCA_Sparseness_count.csv", sep = ";", col.names = T, row.names = F, append = F, dec = ".")
   
   saveRDS(res_PCA_list, './Checkpoints/res_PCA_list.rds')
   saveRDS(res_PCA_loadings, './Checkpoints/res_PCA_loadings.rds')
@@ -677,7 +691,6 @@ res_PCA_loadings = readRDS('./Checkpoints/res_PCA_loadings.rds')
 res_PCA_importance = readRDS('./Checkpoints/res_PCA_importance.rds')
 res_PCA_concat = readRDS('./Checkpoints/res_PCA_concat.rds')
 max_variance_PCA_list = readRDS('./Checkpoints/max_variance_PCA_list.rds')
-
 
 
 # save Explained Variance (also 95h and 99th percentile) for PCA
@@ -744,30 +757,71 @@ max_variance_PCA_list = readRDS('./Checkpoints/max_variance_PCA_list.rds')
   saveRDS(res_PCA_stats, './Checkpoints/res_PCA_stats.rds')
   write.table(res_PCA_stats, "./Stats/2_PCA_Stats_fitting.csv", sep = ";", col.names = T, row.names = F, append = F, dec = ".")
 }
+res_PCA_stats = readRDS('./Checkpoints/res_PCA_stats.rds')
+
+
+
+
+
+
+PCA_to_keep = 'RobPCA'
+df_type_to_keep = c("RestrictedDifference", "Restricted")
+
+
+res_PCA_loadings = res_PCA_loadings %>%
+  filter(PCA %in% PCA_to_keep) %>%
+  filter(data %in% df_type_to_keep) %>%
+  mutate(PCA = as.character(PCA))     # original column is factor
+res_PCA_importance = res_PCA_importance %>%
+  filter(PCA %in% PCA_to_keep) %>%
+  filter(data %in% df_type_to_keep) %>%
+  mutate(PCA = as.character(PCA))     # original column is factor
 
 
 
 ### plot all scree plot
+ordered_df_type = c("Restricted", "RestrictedDifference") # "Original", "Difference", 
 {
-  for (df_type in names(res_PCA_list)){
-    n_row = length(names(res_PCA_list[[df_type]])) * length(names(res_PCA_list[[df_type]][[1]][[1]]))   # #_recov_met * #_PCA_meth
-    n_col = length(names(res_PCA_list[[df_type]][[1]]))     # number of years
+  # split by pc_met
+  
+  avail_years = c()
+  for (l1 in res_PCA_list){
+    for (l2 in l1){
+      avail_years = c(avail_years, names(l2)) %>% unique() %>% sort()
+    }
+  }
+  
+  for (pc_met in names(res_PCA_list[[1]][[1]][[1]])){
+    n_col = length(avail_years)     # number of years
+    
+    max_variance = c()
+    for (l1 in res_PCA_list){
+      for (l2 in l1){
+        for (l3 in l2){
+          max_variance = c(max_variance, l3[[pc_met]][['importance_table']] %>% pull(`Proportion of Variance`) %>% max()) %>% max()
+        }
+      }
+    }
     
     row_list = list()
-    for (yr in names(res_PCA_list[[df_type]][[1]])){
+    for (yr in avail_years){
       i = 1
-      for (recov_met in names(res_PCA_list[[df_type]])){
-        
-        for (pc_met in names(res_PCA_list[[df_type]][[1]][[1]])){
-          row_list[[yr]][[i]] = ggplotGrob(
-            res_PCA_list[[df_type]][[recov_met]][[yr]][[pc_met]][['scree_plot']]+
-              theme(axis.title.y=element_blank(),
-                    axis.title.x=element_blank()) +
-              ggtitle(paste0(pc_met, ' - ', recov_met, ' - ', yr)) +
-              ylim(0, max(max_variance_PCA_list) * 100 + 10)
-          )
+      for (recov_met in names(res_PCA_list[[1]])){
+        for (df_type in ordered_df_type){
+          
+          if (!is.null(res_PCA_list[[df_type]][[recov_met]][[yr]])){   # check for empty year (for Difference df_type)
+            row_list[[yr]][[i]] = ggplotGrob(
+              res_PCA_list[[df_type]][[recov_met]][[yr]][[pc_met]][['scree_plot']]+
+                theme(axis.title.y=element_blank(),
+                      axis.title.x=element_blank()) +
+                ggtitle(paste0(recov_met, '\n', df_type, ' - ', yr)) +
+                ylim(0, max_variance * 100 + 10)
+            )
+          } else {
+            row_list[[yr]][[i]] = ggplotGrob(ggplot() + theme(panel.background = element_blank()))
+          }
           i = i + 1
-        } # pc_met
+        } # df_type
       } # recov_met
     } # yr
     
@@ -776,12 +830,57 @@ max_variance_PCA_list = readRDS('./Checkpoints/max_variance_PCA_list.rds')
       col_list[[i]] = do.call(rbind, c(row_list[[i]], size="last"))
     }
     g = do.call(cbind, c(col_list, size="last"))
-    png(paste0('./Stats/2_PCA_Scree_plot_', df_type, '.png'), width = 30, height = 20, units = 'in', res=300)
+    png(paste0('./Stats/2_PCA_Scree_plot_', pc_met, '.png'), width = 30, height = 20, units = 'in', res=300)
     grid.draw(g)
     dev.off()
-  } # df_type
+  } # pc_met
+  
+  # split by df_type
+  
+  # for (df_type in names(res_PCA_list)){
+  #   n_row = length(names(res_PCA_list[[df_type]])) * length(names(res_PCA_list[[df_type]][[1]][[1]]))   # #_recov_met * #_PCA_meth
+  #   n_col = length(names(res_PCA_list[[df_type]][[1]]))     # number of years
+  #   
+  #   row_list = list()
+  #   for (yr in names(res_PCA_list[[df_type]][[1]])){
+  #     i = 1
+  #     for (recov_met in names(res_PCA_list[[df_type]])){
+  #       
+  #       for (pc_met in names(res_PCA_list[[df_type]][[1]][[1]])){
+  #         row_list[[yr]][[i]] = ggplotGrob(
+  #           res_PCA_list[[df_type]][[recov_met]][[yr]][[pc_met]][['scree_plot']]+
+  #             theme(axis.title.y=element_blank(),
+  #                   axis.title.x=element_blank()) +
+  #             ggtitle(paste0(pc_met, ' - ', recov_met, ' - ', yr)) +
+  #             ylim(0, max(max_variance_PCA_list) * 100 + 10)
+  #         )
+  #         i = i + 1
+  #       } # pc_met
+  #     } # recov_met
+  #   } # yr
+  #   
+  #   col_list = list()
+  #   for (i in c(1:n_col)){
+  #     col_list[[i]] = do.call(rbind, c(row_list[[i]], size="last"))
+  #   }
+  #   g = do.call(cbind, c(col_list, size="last"))
+  #   png(paste0('./Stats/2_PCA_Scree_plot_', df_type, '.png'), width = 30, height = 20, units = 'in', res=300)
+  #   grid.draw(g)
+  #   dev.off()
+  # } # df_type
 }
 
+
+### evaluate average (over years) Cumulative Explained Variance for df_type+pc_met+recov_met
+PC_to_compare = 2
+{
+  summary_Exp_Var = res_PCA_importance %>%
+    filter(PC == paste0("PC", PC_to_compare)) %>%
+    group_by(PCA, data, method) %>%
+    summarise(Average_Cum_Exp_Var = round(mean(`Cumulative Proportion`)*100, 1), .groups = "drop") %>%
+    arrange(desc(Average_Cum_Exp_Var))
+  write.table(summary_Exp_Var, "./Stats/2_PCA_Scree_plot_Avg_Cum_Exp_Var.csv", sep = ";", col.names = T, row.names = F, append = F, dec = ".")
+}
 
 
 ### plot loadings comparison for each year
@@ -819,10 +918,10 @@ var_split_length = 9 # split variables into var_split_length chunks over multipl
             
             if (j_var <= length(var_set)){
               if (i == 1){
-                tit_lab = paste0("<span style='font-size:11'><p><b>", substr(var, 5, 30), "</b></p><span style='font-size:10'><p>", pc_met, "</p>")
-                tit_lab <- rich_text_grob(tit_lab, x = unit(0, "lines"), y = unit(2, "lines"))
+                tit_lab = paste0("<span style='font-size:21'><p><b>", var, "</b></p><span style='font-size:15'><p>", pc_met, "</p>")
+                tit_lab <- rich_text_grob(tit_lab, x = unit(3, "lines"), y = unit(2, "lines"))
               } else {
-                tit_lab = paste0("<span style='font-size:10'>", pc_met)
+                tit_lab = paste0("<span style='font-size:15'>", pc_met)
                 tit_lab <- rich_text_grob(tit_lab, x = unit(0, "lines"), y = unit(1, "lines"))
               }
               if (i == 1){grad = colorRampPalette(c('#f0f0f0', 'black'))}  # greyscale 
@@ -835,7 +934,7 @@ var_split_length = 9 # split variables into var_split_length chunks over multipl
                 summarise(AVG = mean(`Proportion of Variance` * 100),
                           STD = sd(`Proportion of Variance` * 100), .groups = 'drop') %>%
                 arrange(PC)
-              avg_expl_var_lab = paste0('PC', c(1:PC_to_compare), '\nAvg Expl Var: ', round(avg_expl_var$AVG), ' ± ', round(avg_expl_var$STD), '%')
+              avg_expl_var_lab = paste0('PC', c(1:PC_to_compare), '\nAvg Expl Var:\n', round(avg_expl_var$AVG), ' ± ', round(avg_expl_var$STD), '%')
               
               p = ggplot(res_PCA_loadings_adj %>%
                            filter(data == df_type) %>%
@@ -855,17 +954,18 @@ var_split_length = 9 # split variables into var_split_length chunks over multipl
                 theme(axis.title.y=element_blank(),
                       axis.title.x=element_blank(),
                       legend.position = "left",
-                      legend.text=element_text(size=10),
-                      legend.title=element_text(size=10),
+                      legend.text=element_text(size=20),
+                      legend.title=element_text(size=20),
                       legend.key.size = unit(0.35, "cm"),
                       plot.margin = ggplot2::margin(0.7, 0, 0.7, 0.3, "cm"),
                       panel.background = element_rect(fill = "white", colour = "black"),
                       panel.grid.major.y = element_line(colour = "black", linetype = 'dashed', size = 0.2),
                       # panel.grid.minor.y = element_line(colour = "black", linetype = 'dashed', size = 0.2),
                       # strip.text.x = element_blank(),
+                      axis.text.y=element_text(size=20),
                       axis.text.x=element_blank(),
                       axis.ticks.x = element_blank()) +
-                annotate("text", x = c(1:PC_to_compare), y = y_range[2], label = avg_expl_var_lab, hjust = 0.5, vjust = 1, size = 2.2)
+                annotate("text", x = c(1:PC_to_compare), y = y_range[2], label = avg_expl_var_lab, hjust = 0.5, vjust = 1, size = 5)
               # show x label only on bottom row and odd bottom-1 row (if any)
               # if ((length(unique(res_PCA_loadings$PCA))*(var_s - 1) + i == n_row) |
               #     (j_var == n_col & length(var_set_all) %% var_split_length != 0 & var_s == (length(var_set_split) - 1) & i == (n_row / length(var_set_split)))){
@@ -881,7 +981,7 @@ var_split_length = 9 # split variables into var_split_length chunks over multipl
             } else {  # empty plot
               p = ggplotGrob(ggplot() + theme(panel.background = element_blank()))
             }
-            p = gtable_add_padding(p, unit(c(0,0,0.35,0), "cm")) # t,r,b,l
+            p = gtable_add_padding(p, unit(c(0,0,1.5,0), "cm")) # t,r,b,l
             
             row_list[[toString(j_var)]][[length(unique(res_PCA_loadings$PCA))*(var_s - 1) + i]] = p
             i = i + 1
@@ -911,20 +1011,20 @@ var_split_length = 9 # split variables into var_split_length chunks over multipl
       }
       g = do.call(cbind, c(col_list, size="last"))
       g = gtable_add_padding(g, unit(2, "cm")) # t,r,b,l
-      png(paste0('./Stats/2_PCA_Loading_plot_by_variable_', df_type, '_', recov_met, '.png'), width = 22, height = 17, units = 'in', res=300)
+      png(paste0('./Stats/2_PCA_Loading_plot_by_variable_', df_type, '_', recov_met, '.png'), width = 32, height = 13, units = 'in', res=300)
       grid.draw(g)
       dev.off()
       
     } # recov_met
   } # df_type
 }
-# all variables together + difference between FIRST 2 impute methods
+# all variables together
 signif_thresh_plot = 0.2 # used to highlight significative loadings
 leading_var = "growth"
 leading_sign = 'p'  # 'p' or 'n'  zero is considered positive
 PC_to_compare = 2
 {
-  add_recov = ifelse(length(unique(res_PCA_loadings$method)) >= 2, 'DIFFERENCE', c())
+  add_recov = c()#ifelse(length(unique(res_PCA_loadings$method)) >= 2, 'DIFFERENCE', c())
   y_range = range((res_PCA_loadings %>% filter(PC <= PC_to_compare))$loading); y_range[2] = y_range[2] * 1.1 # extra space for avg_expl_var_lab
   n_year = uniqueN(res_PCA_loadings$year) - ifelse('Avg' %in% res_PCA_loadings$year, 1, 0)
   for (df_type in unique(res_PCA_loadings$data)){
@@ -978,11 +1078,11 @@ PC_to_compare = 2
         if (pc == 2){grad = colorRampPalette(c('#deebf7', '#3182bd'))}  # bluescale
         if (pc == 3){grad = colorRampPalette(c('#fee6ce', '#e6550d'))}  # redscale
         if (pc == 4){grad = colorRampPalette(c('#e5f5e0', '#31a354'))}  # greenscale
-        tit_lab = paste0("<span style='font-size:20'><b>", paste0('PC ', pc, '  '), "</b><span style='font-size:17'>",
+        tit_lab = paste0("<span style='font-size:25'><b>", paste0('PC ', pc, '  '), "</b><span style='font-size:20'>",
                          (avg_expl_var %>% filter(PC == paste0('PC', pc)))$LAB)
         tit_lab <- rich_text_grob(tit_lab,
-                                  x = unit(-95, "lines"),#-0.62 * uniqueN(res_PCA_loadings_adj$variable) * uniqueN(res_PCA_loadings_adj$year), "lines"), # for 17*8 should be 95
-                                  y = unit(83 -25 * PC_to_compare, "lines")) # for 2 PC should be 33
+                                  x = unit(28, "lines"),#-0.62 * uniqueN(res_PCA_loadings_adj$variable) * uniqueN(res_PCA_loadings_adj$year), "lines"), # for 17*8 should be 95
+                                  y = unit(2, "lines")) # for 2 PC should be 33    83 -25 * PC_to_compare
         
         p = ggplot(res_PCA_loadings_adj %>%
                      filter(data == df_type) %>%
@@ -1000,7 +1100,11 @@ PC_to_compare = 2
           # geom_hline(aes(yintercept = signif_thresh_plot), color = 'red', linetype = 'twodash', size = 0.4) +
           theme(axis.title.y=element_blank(),
                 axis.title.x=element_blank(),
-                axis.text.x = element_text(angle = 0, hjust = 0.5),
+                axis.text.x = element_text(angle = 90,  size = 17, vjust=0.3),
+                axis.text.y=element_text(size=15),
+                legend.text=element_text(size=20),
+                legend.title=element_text(size=20),
+                strip.text.y = element_text(size = 18,face="bold"),
                 plot.margin = ggplot2::margin(2, 0, 0.7, 0.3, "cm"),
                 panel.background = element_rect(fill = "white", colour = "black"),
                 panel.grid.major.y = element_line(colour = "black", linetype = 'dashed', size = 0.2))+
@@ -1024,17 +1128,20 @@ PC_to_compare = 2
 
 
 
+
+recov_met_set = c('SOFT_IMPUTE')
+
 ### evaluate PCA final index based on PC (=scores)
 PC_to_keep = 2
 index_1_thresh = 0  # threshold to split index 1 (first PC scores)
 index_2_thresh = 0  # threshold to split index 2 (second PC scores) - if PC_to_keep == 2
 load_thresh = 0  # loadings with magnitude below threshold are set to 0 and scores are evaluated always as X * loadings
-leading_var = "FSI_Emb_Capital_to_assets"
+leading_var = "growth"
 leading_sign = 'p'  # 'p' or 'n'  zero is considered positive
 {
   res_index_PCA = list()
   for (df_type in unique(res_PCA_loadings$data)){
-    for (recov_met in unique(res_PCA_loadings$method)){
+    for (recov_met in recov_met_set){   #unique(res_PCA_loadings$method)){
       for (pc_met in unique(res_PCA_loadings$PCA)){
         
         cat('\n evaluating data:', df_type, '- recov_met:', recov_met, '- pc_met:', pc_met)
@@ -1057,8 +1164,6 @@ res_index_PCA = readRDS('./Checkpoints/res_index_PCA.rds')
 
 
 
-df_final = df_final %>%
-  filter(country %in% c("Algeria", "Angola", "Argentina"))
 
 
 
@@ -1066,21 +1171,23 @@ df_final = df_final %>%
 
 
 
+df_type_to_keep = c("RestrictedDifference", "Restricted")
+recov_met_to_keep = c("SOFT_IMPUTE")
 
 
 ### Dynamic Factor Model
-n_factor_tot = 2  # number of factors to evaluate (all incremental sets up to n_factor_tot are evaluated)
+n_factor_tot = 1  # number of factors to evaluate (all incremental sets up to n_factor_tot are evaluated)
 VAR_alpha = 0.2  # sparseness parameter for multi-country VAR
 kalm_Q_hat_mode = 'identity'  # which covariance matrix to use for states (factors) in Kalman filtering, 'from VAR' or 'identity'
 univ_reload = T  # reload previous evaluation (if available) for evaluate_DFM_univar
-univ_save = T  # save intermediate evaluation
+univ_save = F  # save intermediate evaluation
 total_save = T  # save RDS for univariate + multivariate for each pair df_type + recov_met
 {
   res_DFM_factors = res_DFM_loadings = res_DFM_stats = res_DFM_MAPE = c()
   sink(paste0('./Log/DFM_fitting_log_', format(Sys.time(), "%Y-%m-%dT%H%M"), '.txt'), append = F, split = T, type = 'output')
   cat("\n\n+++++++++++++++++++++", format(Sys.time(), "%Y-%m-%d - %H:%M:%S"),"+++++++++++++++++++++\n\n")
-  for (df_type in unique(df_final$data)){
-    for (recov_met in unique(df_final$method)){   # for (recov_met in c('TENSOR_BF')){
+  for (df_type in df_type_to_keep){ #unique(df_final$data)){
+    for (recov_met in recov_met_to_keep){   # unique(df_final$method)){
       
       cat('\n\n\n-----------------------################# evaluating data:', df_type, '- recov_met:', recov_met, '#################-----------------------\n')
       
@@ -1147,7 +1254,8 @@ total_save = T  # save RDS for univariate + multivariate for each pair df_type +
         DFM_multi = evaluate_DFM_multivar(res_DFM_factors, res_DFM_loadings, res_DFM_stats, res_DFM_list, res_DFM_MAPE,
                                           df_SP_orig, df_type, recov_met, n_factor,
                                           VAR_alpha = VAR_alpha,
-                                          kalm_Q_hat_mode = kalm_Q_hat_mode)
+                                          kalm_Q_hat_mode = kalm_Q_hat_mode,
+                                          multiv_reload_Kalm = T, res_DFM_list_reload = res_DFM_list_reload)
         res_DFM_stats = DFM_multi$res_DFM_stats
         res_DFM_list = DFM_multi$res_DFM_list
         res_DFM_factors = DFM_multi$res_DFM_factors
@@ -1156,7 +1264,9 @@ total_save = T  # save RDS for univariate + multivariate for each pair df_type +
       } # n_factor
       
       if (total_save){
+        cat('\n\n** saving... ')
         saveRDS(res_DFM_list, paste0('./Checkpoints/DFM/', RDS_lab))
+        cat('Done')
       }
       
     } # recov_met
@@ -1213,12 +1323,17 @@ res_DFM_MAPE = readRDS(paste0('./Checkpoints/res_DFM_MAPE_', gsub(' ', '', kalm_
 
 
 
+
+
+dfm_met_to_plot = c("DFM_multivar")
+
+
 ### evaluate DFM final index based on Factors
 # only 1 and 2 factors plot are showed
 index_1_thresh = 0  # threshold to split index 1 (first factor)
 index_2_thresh = 0  # threshold to split index 2 (second factor)
 load_thresh = 0  # loadings with magnitude below threshold are set to 0
-leading_var = "FSI_Emb_Capital_to_assets"
+leading_var = "growth"
 leading_sign = 'p'  # 'p' or 'n'  zero is considered positive
 VAR_alpha = 0.2  # sparseness parameter for multi-country VAR
 kalm_Q_hat_mode = 'identity'  # which covariance matrix to use for states (factors) in Kalman filtering, 'from VAR' or 'identity'
@@ -1230,7 +1345,7 @@ kalm_Q_hat_mode = 'identity'  # which covariance matrix to use for states (facto
       RDS_lab = paste0(gsub(' ', '', kalm_Q_hat_mode), '_', VAR_alpha, '_', df_type, '_', recov_met, '.rds')
       res_DFM_list = readRDS(paste0('./Checkpoints/DFM/', RDS_lab))
       
-      for (dfm_met in unique(res_DFM_loadings$DFM)){
+      for (dfm_met in dfm_met_to_plot){
         
         res_index_DFM = evaluate_index_DFM(res_index_DFM, res_DFM_best_model, res_DFM_factors, res_DFM_list, res_DFM_loadings, index_1_thresh, index_2_thresh,
                                            load_thresh, leading_var, leading_sign, df_type, recov_met, dfm_met, expl_var_to_show=95)
@@ -1255,7 +1370,7 @@ kalm_Q_hat_mode = 'identity'  # which covariance matrix to use for states (facto
       RDS_lab = paste0(gsub(' ', '', kalm_Q_hat_mode), '_', VAR_alpha, '_', df_type, '_', recov_met, '.rds')
       res_DFM_list = readRDS(paste0('./Checkpoints/DFM/', RDS_lab))
       
-      for (dfm_met in unique(res_DFM_loadings$DFM)){
+      for (dfm_met in dfm_met_to_plot){
         
         best_model = res_DFM_best_model %>%
           filter(data == df_type) %>%
@@ -1311,6 +1426,14 @@ kalm_Q_hat_mode = 'identity'  # which covariance matrix to use for states (facto
 
 
 
+
+
+df_type_to_keep = c("RestrictedDifference", "Restricted")
+recov_met_to_keep = c("SOFT_IMPUTE")
+PCA_to_keep = c('RobPCA')
+DFM_to_keep = c('DFM_multivar')
+
+
 ### plot comparison of index evolution over time for all methods
 res_PCA_loadings = readRDS('./Checkpoints/res_PCA_loadings.rds')
 res_index_PCA = readRDS('./Checkpoints/res_index_PCA.rds')
@@ -1325,9 +1448,9 @@ algo_to_plot = c('RobPCA', 'DFM_multivar')
   # create single list of evaluated index (raw scores)
   res_ALL_scores = c()
   # from PCA
-  for (df_type in unique(res_PCA_loadings$data)){
-    for (recov_met in unique(res_PCA_loadings$method)){
-      for (pc_met in unique(res_PCA_loadings$PCA)){
+  for (df_type in df_type_to_keep){
+    for (recov_met in recov_met_to_keep){
+      for (pc_met in PCA_to_keep){
         
         pc_mat = res_index_PCA[[df_type]][[recov_met]][[pc_met]][['scores_raw']]
         new_col = paste0(colnames(pc_mat), pc_mat[1,])
@@ -1365,9 +1488,9 @@ algo_to_plot = c('RobPCA', 'DFM_multivar')
   } # df_type
   
   # from DFM
-  for (df_type in setdiff(unique(res_DFM_loadings$data), c('ExtendedDifference', 'ExtendedOriginal'))){
-    for (recov_met in unique(res_DFM_loadings$method)){
-      for (dfm_met in unique(res_DFM_loadings$DFM)){
+  for (df_type in df_type_to_keep){
+    for (recov_met in recov_met_to_keep){
+      for (dfm_met in DFM_to_keep){
         
         best_model = res_DFM_best_model %>%
           filter(data == df_type) %>%

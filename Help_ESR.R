@@ -1044,7 +1044,7 @@ plot_loadings = function(load_list, load_range, dim_to_show_lab, add_title = '',
           plot.title = element_text(size = 20),
           legend.position = 'none') +
     ggtitle(paste0('Variable Importance for Index ', dim_to_show_lab, add_title)) +
-    annotate("text", x = c(1:nrow(load_list)), y = 0, label = substr(load_list$Variable, 5, 200), hjust = 0.5, vjust = 0.5, size = 4, fontface = 'bold')
+    annotate("text", x = c(1:nrow(load_list)), y = 0, label = load_list$Variable, hjust = 0.5, vjust = 0.5, size = 4, fontface = 'bold')
   
   if (err_bar){
     p = p +
@@ -1137,8 +1137,8 @@ evaluate_index_PCA = function(res_index_PCA, res_PCA_list, res_PCA_loadings, res
       mutate(PC = paste0('I_', PC)) %>%
       spread(PC, loading) %>%
       select(-PCA, -data, -year, -method)
-    X = res_PCA_list[[df_type]][[recov_met]][[yr]][[pc_met]][['pca']][['orig_data']] %>% scale()
-    row_order = rownames(res_PCA_list[[df_type]][[recov_met]][[yr]][[pc_met]][['pca']][['rotation']])
+    X = res_PCA_list[[df_type]][[recov_met]][[as.character(yr)]][[pc_met]][['pca']][['orig_data']] %>% clever_scale(c())
+    row_order = rownames(res_PCA_list[[df_type]][[recov_met]][[as.character(yr)]][[pc_met]][['pca']][['rotation']])
     load = data.frame(variable = row_order, stringsAsFactors = F) %>% left_join(load, by = "variable") %>% select(-variable) %>% as.matrix()
     load[abs(load) < load_thresh] = 0
     # raw scores
@@ -1154,7 +1154,7 @@ evaluate_index_PCA = function(res_index_PCA, res_PCA_list, res_PCA_loadings, res
     scores_out_index = scores_out_index %>% cbind(scores_index_mod[, -1])
     
     load_out = load_out %>% cbind(colnames(load) %>% rbind(load) %>% as.data.frame() %>% setNames(rep(yr, PC_to_keep)))
-
+    
     # score plot
     for (pc in 1:min(c(PC_to_keep, 2))){
       
@@ -1344,6 +1344,7 @@ evaluate_DFM_univar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stats,
     select(-ID, -TIME) %>%
     t() %>%
     MARSS::zscore()
+  if (sum(is.na(data_work)) > 0){cat('\n\n\n##################### missing in data_work due to MARSS::zscore()')}
   
   # set up DFM matrices
   Z = matrix(
@@ -1557,7 +1558,7 @@ evaluate_DFM_univar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stats,
 # adjust DFM taking into account all countries together
 evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stats, res_DFM_list, res_DFM_MAPE,
                                  df_SP_orig, df_type, recov_met, n_factor, VAR_alpha = 0.9, kalm_Q_hat_mode, true_factors = NULL,
-                                 res_DFM_list_reload = NULL, multiv_reload_VAR = F, multiv_reload_Kalm = F){
+                                 max_kalman_loop = 50, res_DFM_list_reload = NULL, multiv_reload_VAR = F, multiv_reload_Kalm = F){
   
   # 1 - Fit a VAR model for x_t factor/states process, stacking all estimated x_t from all countries -> get A* from x_t = A*x_t-1 + N(0, Q*)
   # 2 - Create C* as block diagonal matrix with diag(C*) = [C1, ..., Cn], where Ci is the estimated loading for each country
@@ -1566,15 +1567,17 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
   # VAR_alpha: penalty for sparseness: 1 is LASSO, 0 is Ridge
   # kalm_Q_hat_mode: select variance matrix for state variable (factors) when filtering with Kalman
   #                  'from VAR': takes residual covariance from VAR model on x_t,  'identity': identity matrix
+  # max_kalman_loop: Kalman is fitted several times until convergence is reached, with hard stop to max_kalman_loop. In case of non convergece
+  #                   (standardized) factors from univariate DFM are stacked and used as final factors
   # true_factors: if testing Kalman filter's reconstruction ability, provide true factors used to generate y_t in the form of factor_work, i.e.
   #               time on row (e.g. 2010 top, 2017 bottom), pairs country-#factor on column (e.g. "Albania_1", "Albania_2", etc)
   
   # select data
   year_order = sort(unique((res_DFM_factors %>%
-                             filter(data == df_type) %>%
-                             filter(method == recov_met) %>%
-                             filter(DFM == 'DFM_univar') %>%
-                             filter(Total_Factors == n_factor))$year))
+                              filter(data == df_type) %>%
+                              filter(method == recov_met) %>%
+                              filter(DFM == 'DFM_univar') %>%
+                              filter(Total_Factors == n_factor))$year))
   variable_order = sort(unique(res_DFM_loadings$variable))
   country_order = sort(unique(res_DFM_factors$country))
   country_fact_order = (expand.grid(country_order, paste0('_', 1:n_factor)) %>%
@@ -1608,6 +1611,7 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
     t() %>%
     MARSS::zscore() %>%
     t()
+  if (sum(is.na(factor_work)) > 0){cat('\n\n\n##################### missing in factor_work due to MARSS::zscore()')}
   
   # reload for simulation only
   reload_check = res_DFM_list_reload[[df_type]][[recov_met]][['DFM_multivar']][[paste0(n_factor, '_factors')]][['All']]
@@ -1660,8 +1664,8 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
              Total_Factors = n_factor,
              algo = 'VAR') %>%
       select(algo, Total_Factors, everything())
-    )
-
+  )
+  
   # create C* as block diagonal matrix
   list_work_C = list_work_R = list()
   lc = 1
@@ -1695,16 +1699,26 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
     select(-country, -Variable) %>%
     select(ref, everything()) 
   
+  # y_mat = y_df %>%  # standardize
+  #   select(-ref)  %>%
+  #   as.matrix() %>%
+  #   MARSS::zscore()
+  
   y_mat = y_df %>%  # standardize
     select(-ref)  %>%
-    as.matrix() %>%
-    MARSS::zscore()
+    t() %>%
+    data.frame() %>%
+    setNames(1:ncol(.)) %>%
+    clever_scale(c()) %>%
+    t()
+  if (sum(is.na(y_mat)) > 0){cat('\n\n\n##################### missing in y_mat due to MARSS::zscore()')}
   
   # check for constant value -> remove yt from Kalman filter
   var_to_remove_const = c()
   if (sum(!is.finite(y_mat)) > 0){
     var_to_remove_const = which(apply(y_mat, 1, function(x) sum(!is.finite(x))) > 0)
   }
+  var_to_remove_const = c(var_to_remove_const, which(apply(y_mat, 1, function(x) uniqueN(x)) == 1)) %>% unique() %>% sort()
   
   # loop Kalman Filter untill convergence
   cat('\n** evaluating Kalman Filter...\n')
@@ -1713,19 +1727,21 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
     var_to_remove_all = C_hat_remov = R_hat_remov = c()
     var_to_remove_lab = ''
     y_mat_work = reload_check[['kalm_y_mat_work']]
-    cat(' Reloaded \n')
+    cat('    Reloaded \n')
   } else {
     start_time = Sys.time()
     var_to_remove_lab = ''
     if (length(var_to_remove_const) > 0){
       var_to_remove_all = var_to_remove_const
-      cat('\n     *** removed for constant values:\n         ')
+      cat('\n     *** removed for constant values (', length(var_to_remove_all), '):\n         ')
       cat(paste0(y_df$ref[var_to_remove_const], sep = ','))
     } else {
       var_to_remove_all = c()
     }
     stop = 0
-    while (stop == 0){
+    while_count = 1
+    while (stop == 0 & while_count <= max_kalman_loop){
+      loop_start_time = Sys.time()
       # check variables to remove
       if (length(var_to_remove_all) > 0){
         y_mat_work = y_mat[-var_to_remove_all, ] %>% `rownames<-`(setdiff(country_variab_order, y_df$ref[var_to_remove_all]))
@@ -1749,6 +1765,7 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
         HHt_work = diag(1, ncol(factor_work))
         cat('##########################  please enter valid entry for kalm_Q_hat_mode - identity has been selected by default')
       }
+      cat('\n  Trying loop:', while_count, '/', max_kalman_loop)
       outp = capture.output(
         kalm_fit <- fkf(
           a0 = factor_work[1,],
@@ -1767,9 +1784,13 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
       if (sum(kalm_fit$status) > 0){
         var_to_remove_add = unique(rownames(C_hat_work)[kalm_fit$status])
         var_to_remove_all = c(var_to_remove_all, match(var_to_remove_add, y_df$ref))
+        cat('\n         - error dpotri:', kalm_fit$status[1], '  error dpotrf:', kalm_fit$status[2],
+            ' --  additionally removing:', paste0(var_to_remove_add, collapse = ","), ' --   observations MAE:', mean(abs(kalm_fit$vt), na.rm=T),
+            ' --  Done in', round((as.numeric(Sys.time())-as.numeric(loop_start_time)) / 60), 'mins')
       } else {
         stop = 1
       }
+      while_count = while_count + 1
     } # while
     if(length(var_to_remove_all) > 0){
       var_to_remove_lab = paste0(y_df$ref[var_to_remove_all], collapse = ' | ')
@@ -1782,34 +1803,44 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
   }
   
   if (sum(kalm_fit$status) > 0){
-    cat('###########  Kalman filter did not converge')
+    cat('\n\n###########  Kalman filter did not converge - using factors and residuals (for RSS) from univariate DFMs')
+    
+    kalm_filter_factors = factor_work
+    kalm_filter_observ_error = c()
+    reload_univ = res_DFM_list_reload[[df_type]][[recov_met]][['DFM_univar']][[paste0(n_factor, '_factors')]]
+    for (country_name in names(reload_univ)){
+      dfm_fit_univ = reload_univ[[country_name]][['dfm_fit']]
+      RSS_err = try(capture.output(RSS_val <- suppressWarnings(residuals(dfm_fit_univ)$model.residuals ^ 2)), silent = T)
+      if (class(RSS_err) != "try-error"){
+        kalm_filter_observ_error = kalm_filter_observ_error %>%
+          rbind(RSS_val)
+      }
+    }
     err_code = paste0(country_variab_order[kalm_fit$status], collapse = ' | ')
-    kalm_filter_factors = matrix(NA, nrow = nrow(factor_work), ncol = ncol(factor_work))
-    kalm_logLik = kalm_AICc = kalm_observation_RMSE = kalm_observation_MAPE = kalm_RSS = kalm_TSS = kalm_Explain_var = 
-      kalm_Explain_var_95 = kalm_Explain_var_99 = kalm_factors_test_RMSE = kalm_factors_test_MAPE = kalm_observation_MAPE_max = 
-      kalm_observation_MAPE_95 = kalm_observation_MAPE_99 = kalm_RSS_95 = kalm_RSS_99 = kalm_TSS_95 = kalm_TSS_99 = 
-      kalm_factors_test_MAPE_95 = kalm_factors_test_MAPE_99 = kalm_factors_test_MAPE_max = NA
   } else {
     err_code = ''
     kalm_filter_factors = t(kalm_fit$att)
-    k = 2 * ncol(factor_work) + ncol(factor_work) * nrow(y_mat_work) + nrow(y_mat_work) ^ 2  # number of parameters, i.e. size of T,Z,HH,GG
-    kalm_logLik = kalm_fit$logLik  # if NA means error in BLAS and LAPACK - see Details of fkf
-    kalm_AICc = (2 * k - 2 * kalm_logLik) + (2 * k^2 + 2 * k) / (ncol(y_mat_work) - k - 1) # corrected AIC
     kalm_filter_observ_error = kalm_fit$vt
-    kalm_RSS_val = kalm_filter_observ_error ^ 2
-    kalm_TSS_val = (y_mat_work - mean(y_mat_work)) ^ 2
-    kalm_RSS = sum(kalm_RSS_val)
-    kalm_TSS = sum(kalm_TSS_val)
-    ind_95 = kalm_RSS_val <= quantile(kalm_RSS_val, 0.95)
-    kalm_RSS_95 = sum(kalm_RSS_val[ind_95])
-    kalm_TSS_95 = sum(kalm_TSS_val[ind_95])
-    ind_99 = kalm_RSS_val <= quantile(kalm_RSS_val, 0.99)
-    kalm_RSS_99 = sum(kalm_RSS_val[ind_99])
-    kalm_TSS_99 = sum(kalm_TSS_val[ind_99])
-    kalm_Explain_var = 1 - kalm_RSS / kalm_TSS
-    kalm_Explain_var_99 = 1 - kalm_RSS_99 / kalm_TSS_99
-    kalm_Explain_var_95 = 1 - kalm_RSS_95 / kalm_TSS_95
-    kalm_observation_RMSE = sqrt(mean(kalm_filter_observ_error ^ 2))
+  }
+  
+  k = 2 * ncol(factor_work) + ncol(factor_work) * nrow(y_mat_work) + nrow(y_mat_work) ^ 2  # number of parameters, i.e. size of T,Z,HH,GG
+  kalm_logLik = kalm_fit$logLik  # if NA means error in BLAS and LAPACK - see Details of fkf
+  kalm_AICc = (2 * k - 2 * kalm_logLik) + (2 * k^2 + 2 * k) / (ncol(y_mat_work) - k - 1) # corrected AIC
+  kalm_RSS_val = kalm_filter_observ_error ^ 2
+  kalm_TSS_val = (y_mat_work - mean(y_mat_work)) ^ 2
+  kalm_RSS = sum(kalm_RSS_val)
+  kalm_TSS = sum(kalm_TSS_val)
+  ind_95 = kalm_RSS_val <= quantile(kalm_RSS_val, 0.95)
+  kalm_RSS_95 = sum(kalm_RSS_val[ind_95])
+  kalm_TSS_95 = sum(kalm_TSS_val[ind_95])
+  ind_99 = kalm_RSS_val <= quantile(kalm_RSS_val, 0.99)
+  kalm_RSS_99 = sum(kalm_RSS_val[ind_99])
+  kalm_TSS_99 = sum(kalm_TSS_val[ind_99])
+  kalm_Explain_var = 1 - kalm_RSS / kalm_TSS
+  kalm_Explain_var_99 = 1 - kalm_RSS_99 / kalm_TSS_99
+  kalm_Explain_var_95 = 1 - kalm_RSS_95 / kalm_TSS_95
+  kalm_observation_RMSE = sqrt(mean(kalm_filter_observ_error ^ 2))
+  if (sum(kalm_fit$status) == 0){
     kalm_MAPE_list = kalm_filter_observ_error %>%
       `rownames<-`(rownames(y_mat_work)) %>%
       `colnames<-`(colnames(y_mat_work)) %>%
@@ -1837,34 +1868,38 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
                algo = 'kalm') %>%
         select(algo, Total_Factors, everything())
     )
-    if (!is.null(true_factors)){
-      kalm_factors_test_RMSE = sqrt(mean((kalm_filter_factors - true_factors) ^ 2))
-      kalm_factors_test_MAPE_val = true_factors %>%
-        `rownames<-`(1:nrow(true_factors)) %>%
-        as.table() %>%
-        as.data.frame(stringsAsFactors = F) %>%
-        setNames(c('year', 'variable', 'original')) %>%
-        left_join(
-          kalm_filter_factors %>%
-            `rownames<-`(1:nrow(true_factors)) %>%
-            `colnames<-`(colnames(true_factors)) %>%
-            as.table() %>%
-            as.data.frame(stringsAsFactors = F) %>%
-            setNames(c('year', 'variable', 'prediction')),
-          by = c("year", "variable")
-        ) %>%
-        mutate(residual = original - prediction) %>%
-        filter(abs(original) > .Machine$double.eps) %>%
-        mutate(MAPE = abs(residual / original)) %>%
-        arrange(desc(MAPE))
-      kalm_factors_test_MAPE = mean(kalm_factors_test_MAPE_val$MAPE)
-      kalm_factors_test_MAPE_max = kalm_factors_test_MAPE_val$MAPE[1]
-      kalm_factors_test_MAPE_95 = mean((kalm_factors_test_MAPE_val %>% filter(row_number() > ceiling(0.05 * nrow(kalm_factors_test_MAPE_val))))$MAPE)
-      kalm_factors_test_MAPE_99 = mean((kalm_factors_test_MAPE_val %>% filter(row_number() > ceiling(0.01 * nrow(kalm_factors_test_MAPE_val))))$MAPE)
-    } else {
-      kalm_factors_test_RMSE = kalm_factors_test_MAPE = kalm_factors_test_MAPE_max = kalm_factors_test_MAPE_95 = kalm_factors_test_MAPE_99 = NA
-    }
+  } else {
+    kalm_observation_MAPE = kalm_factors_test_MAPE = kalm_observation_MAPE_max = kalm_observation_MAPE_95 = kalm_observation_MAPE_99 = 
+      kalm_factors_test_MAPE_95 = kalm_factors_test_MAPE_99 = kalm_factors_test_MAPE_max = NA
   }
+  if (!is.null(true_factors)){
+    kalm_factors_test_RMSE = sqrt(mean((kalm_filter_factors - true_factors) ^ 2))
+    kalm_factors_test_MAPE_val = true_factors %>%
+      `rownames<-`(1:nrow(true_factors)) %>%
+      as.table() %>%
+      as.data.frame(stringsAsFactors = F) %>%
+      setNames(c('year', 'variable', 'original')) %>%
+      left_join(
+        kalm_filter_factors %>%
+          `rownames<-`(1:nrow(true_factors)) %>%
+          `colnames<-`(colnames(true_factors)) %>%
+          as.table() %>%
+          as.data.frame(stringsAsFactors = F) %>%
+          setNames(c('year', 'variable', 'prediction')),
+        by = c("year", "variable")
+      ) %>%
+      mutate(residual = original - prediction) %>%
+      filter(abs(original) > .Machine$double.eps) %>%
+      mutate(MAPE = abs(residual / original)) %>%
+      arrange(desc(MAPE))
+    kalm_factors_test_MAPE = mean(kalm_factors_test_MAPE_val$MAPE)
+    kalm_factors_test_MAPE_max = kalm_factors_test_MAPE_val$MAPE[1]
+    kalm_factors_test_MAPE_95 = mean((kalm_factors_test_MAPE_val %>% filter(row_number() > ceiling(0.05 * nrow(kalm_factors_test_MAPE_val))))$MAPE)
+    kalm_factors_test_MAPE_99 = mean((kalm_factors_test_MAPE_val %>% filter(row_number() > ceiling(0.01 * nrow(kalm_factors_test_MAPE_val))))$MAPE)
+  } else {
+    kalm_factors_test_RMSE = kalm_factors_test_MAPE = kalm_factors_test_MAPE_max = kalm_factors_test_MAPE_95 = kalm_factors_test_MAPE_99 = NA
+  }
+
   
   # save results
   res_DFM_stats = res_DFM_stats %>% bind_rows(
@@ -1975,7 +2010,7 @@ simulate_DFM_multivar = function(res_DFM_simulation, reload_list, seed_i, rep, n
                         mutate(COL = paste0(Var1, Var2)) %>%
                         select(COL) %>%
                         arrange(COL))$COL
-
+  
   # reload for simulation only
   if (!is.null(reload_list)){
     res_DFM_list_reload_sim = reload_list$res_DFM_list
@@ -2118,7 +2153,7 @@ evaluate_index_DFM = function(res_index_DFM, res_DFM_best_model, res_DFM_factors
     filter(Best_model == 'YES')
   n_factor_best = best_model$Total_Factors
   expl_var_to_extract = ifelse(expl_var_to_show==0, 'Explain_var', paste0('Explain_var_', expl_var_to_show))
-  expl_var = unname(unlist(best_model %>% select(expl_var_to_extract)))
+  expl_var = unname(unlist(best_model %>% select(all_of(expl_var_to_extract))))
   
   factors_ref = res_DFM_factors %>%
     filter(data == df_type) %>%
@@ -2193,8 +2228,8 @@ evaluate_index_DFM = function(res_index_DFM, res_DFM_best_model, res_DFM_factors
                      expl_var = expl_var,
                      add_title_variance = ifelse(expl_var_to_show==0, '', paste0(' (', expl_var_to_show, 'th percentile)')))
       
-      row_list[[toString((fact - 1) * min(c(max_factor, 2)) + 1)]][[i]] = ggplotGrob(p)
-      row_list[[toString(min(c(max_factor, 2)) * fact)]][[i]] = ggplotGrob(p_load)
+      row_list[[toString((fact - 1) * 2 + 1)]][[i]] = ggplotGrob(p)
+      row_list[[toString(2 * fact)]][[i]] = ggplotGrob(p_load)
     } # fact
     i = i + 1
   } # yr
@@ -2237,16 +2272,16 @@ space_label = function(label_list, offset){
       arrange(val) %>%
       mutate(space = c(0, diff(val))) %>%
       mutate(new_val = val)
-  for (i in 2:nrow(label_list)){
-    if (label_list$space[[i]] <= offset){
-      half_space = (offset - label_list$space[[i]]) / 2
-      label_list$new_val[[i - 1]] = label_list$val[[i - 1]] - half_space
-      label_list$new_val[[i]] = label_list$val[[i]] + half_space
+    for (i in 2:nrow(label_list)){
+      if (label_list$space[[i]] <= offset){
+        half_space = (offset - label_list$space[[i]]) / 2
+        label_list$new_val[[i - 1]] = label_list$val[[i - 1]] - half_space
+        label_list$new_val[[i]] = label_list$val[[i]] + half_space
+      }
     }
-  }
-  label_list = label_list %>%
-    mutate(val = new_val)
-  offset = offset * 0.99
+    label_list = label_list %>%
+      mutate(val = new_val)
+    offset = offset * 0.99
   }
   
   label_list = label_list %>% 
