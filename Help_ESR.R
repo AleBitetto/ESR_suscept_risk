@@ -1558,12 +1558,17 @@ evaluate_DFM_univar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stats,
 # adjust DFM taking into account all countries together
 evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stats, res_DFM_list, res_DFM_MAPE,
                                  df_SP_orig, df_type, recov_met, n_factor, VAR_alpha = 0.9, kalm_Q_hat_mode, true_factors = NULL,
-                                 max_kalman_loop = 50, res_DFM_list_reload = NULL, multiv_reload_VAR = F, multiv_reload_Kalm = F){
+                                 max_kalman_loop = 50, res_DFM_list_reload = NULL, multiv_reload_VAR = F, multiv_reload_Kalm = F,
+                                 multivar_mode = 'DFM_multivar'){
   
+  # if multivar_mode == 'DFM_multivar':
   # 1 - Fit a VAR model for x_t factor/states process, stacking all estimated x_t from all countries -> get A* from x_t = A*x_t-1 + N(0, Q*)
   # 2 - Create C* as block diagonal matrix with diag(C*) = [C1, ..., Cn], where Ci is the estimated loading for each country
   # 3 - perform Kalman Filter to filter x_t with A* and C*
-  
+  #
+  # if multivar_mode == 'DFM_multivar_stacked':
+  # - factors from DMF_univar are simply stacked as final factors
+
   # VAR_alpha: penalty for sparseness: 1 is LASSO, 0 is Ridge
   # kalm_Q_hat_mode: select variance matrix for state variable (factors) when filtering with Kalman
   #                  'from VAR': takes residual covariance from VAR model on x_t,  'identity': identity matrix
@@ -1614,82 +1619,9 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
   if (sum(is.na(factor_work)) > 0){cat('\n\n\n##################### missing in factor_work due to MARSS::zscore()')}
   
   # reload for simulation only
-  reload_check = res_DFM_list_reload[[df_type]][[recov_met]][['DFM_multivar']][[paste0(n_factor, '_factors')]][['All']]
+  reload_check = res_DFM_list_reload[[df_type]][[recov_met]][[multivar_mode]][[paste0(n_factor, '_factors')]][['All']]
   
-  # select factors for all countries and estimate a single factor matrix with sparse VAR
-  cat('\n** evaluating VAR...')
-  if (multiv_reload_VAR & !is.null(reload_check)){
-    VAR_fit = reload_check[['VAR_fit']]
-    cat(' Reloaded \n')
-  } else {
-    set.seed(42)
-    start_time = Sys.time()
-    VAR_fit = fitVAR(factor_work,  # variable (time series) on column
-                     p = 1,
-                     penalty = 'ENET',
-                     nfolds = 5,
-                     alpha = VAR_alpha)
-    cat(' Done in', round((as.numeric(Sys.time())-as.numeric(start_time)) / 60), 'mins \n')
-  }
-  
-  A_hat = VAR_fit$A[[1]]
-  A_sparseness = sum(A_hat!=0) / prod(dim(A_hat))
-  Q_hat = VAR_fit$sigma
-  VAR_RMSE = sqrt(mean(VAR_fit$residuals ^ 2))
-  VAR_CV_RMSE = sqrt(VAR_fit$mse)
-  VAR_CV_RMSE_SD = sqrt(VAR_fit$mseSD)
-  VAR_MAPE_list = VAR_fit$residuals %>%
-    `rownames<-`(year_order) %>%
-    as.table() %>%
-    as.data.frame(stringsAsFactors = F) %>%
-    setNames(c('year', 'variable', 'residual')) %>%
-    left_join(VAR_fit$series %>%
-                `rownames<-`(year_order) %>%
-                as.table() %>%
-                as.data.frame(stringsAsFactors = F) %>%
-                setNames(c('year', 'variable', 'original')),
-              by = c("year", "variable")) %>%
-    filter(abs(original) > .Machine$double.eps) %>%
-    mutate(MAPE = abs(residual / original)) %>%
-    arrange(desc(MAPE))
-  VAR_MAPE = mean(VAR_MAPE_list$MAPE)
-  VAR_MAPE_max = VAR_MAPE_list$MAPE[1]
-  VAR_MAPE_95 = mean((VAR_MAPE_list %>% filter(row_number() > ceiling(0.05 * nrow(VAR_MAPE_list))))$MAPE)
-  VAR_MAPE_99 = mean((VAR_MAPE_list %>% filter(row_number() > ceiling(0.01 * nrow(VAR_MAPE_list))))$MAPE)
-  res_DFM_MAPE = res_DFM_MAPE %>% bind_rows(
-    VAR_MAPE_list %>%
-      filter(row_number() < ceiling(0.05 * nrow(VAR_MAPE_list))) %>%
-      mutate(method = recov_met,
-             data = df_type,
-             Total_Factors = n_factor,
-             algo = 'VAR') %>%
-      select(algo, Total_Factors, everything())
-  )
-  
-  # create C* as block diagonal matrix
-  list_work_C = list_work_R = list()
-  lc = 1
-  for (con in country_order){
-    list_work_C[[lc]] = data.frame(variable = variable_order, stringsAsFactors = F) %>%
-      left_join(
-        loading_work %>%
-          filter(country == con) %>%
-          select(variable, Factor, loading) %>%
-          spread(Factor, loading),
-        by = "variable") %>%
-      select(-variable) %>%
-      select(all_of(1:n_factor)) %>%
-      as.matrix()
-    
-    list_work_R[[lc]] = res_DFM_list[[df_type]][[recov_met]][['DFM_univar']][[paste0(n_factor, '_factors')]][[con]][['R']]
-    lc = lc + 1
-  }
-  
-  C_hat = bdiag(list_work_C) %>% as.matrix()
-  R_hat = bdiag(list_work_R) %>% as.matrix()
-  
-  # perform Kalman Filter to filter x_t with A* and C*
-  
+  # format observed variable
   y_df = df_SP_orig %>%   # row: pairs country-variable, col: years
     gather('Variable', 'val', -country, -year) %>%
     spread(year, val) %>%
@@ -1713,97 +1645,190 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
     t()
   if (sum(is.na(y_mat)) > 0){cat('\n\n\n##################### missing in y_mat due to MARSS::zscore()')}
   
-  # check for constant value -> remove yt from Kalman filter
-  var_to_remove_const = c()
-  if (sum(!is.finite(y_mat)) > 0){
-    var_to_remove_const = which(apply(y_mat, 1, function(x) sum(!is.finite(x))) > 0)
-  }
-  var_to_remove_const = c(var_to_remove_const, which(apply(y_mat, 1, function(x) uniqueN(x)) == 1)) %>% unique() %>% sort()
   
-  # loop Kalman Filter untill convergence
-  cat('\n** evaluating Kalman Filter...\n')
-  if (multiv_reload_Kalm & !is.null(reload_check)){
-    kalm_fit = reload_check[['kalm_fit']]
-    var_to_remove_all = C_hat_remov = R_hat_remov = c()
-    var_to_remove_lab = ''
-    y_mat_work = reload_check[['kalm_y_mat_work']]
-    cat('    Reloaded \n')
-  } else {
-    start_time = Sys.time()
-    var_to_remove_lab = ''
-    if (length(var_to_remove_const) > 0){
-      var_to_remove_all = var_to_remove_const
-      cat('\n     *** removed for constant values (', length(var_to_remove_all), '):\n         ')
-      cat(paste0(y_df$ref[var_to_remove_const], sep = ','))
+  ####### multivar_mode == 'DFM_multivar'
+  
+  if (multivar_mode == 'DFM_multivar'){
+    # select factors for all countries and estimate a single factor matrix with sparse VAR
+    cat('\n** evaluating VAR...')
+    if (multiv_reload_VAR & !is.null(reload_check)){
+      VAR_fit = reload_check[['VAR_fit']]
+      cat(' Reloaded \n')
     } else {
-      var_to_remove_all = c()
+      set.seed(42)
+      start_time = Sys.time()
+      VAR_fit = fitVAR(factor_work,  # variable (time series) on column
+                       p = 1,
+                       penalty = 'ENET',
+                       nfolds = 5,
+                       alpha = 0)# VAR_alpha)
+      cat(' Done in', round((as.numeric(Sys.time())-as.numeric(start_time)) / 60), 'mins \n')
     }
-    stop = 0
-    while_count = 1
-    while (stop == 0 & while_count <= max_kalman_loop){
-      loop_start_time = Sys.time()
-      # check variables to remove
-      if (length(var_to_remove_all) > 0){
-        y_mat_work = y_mat[-var_to_remove_all, ] %>% `rownames<-`(setdiff(country_variab_order, y_df$ref[var_to_remove_all]))
-        C_hat_remov = C_hat[-var_to_remove_all, ] %>% `rownames<-`(setdiff(country_variab_order, y_df$ref[var_to_remove_all])) %>% `colnames<-`(country_fact_order)
-        R_hat_remov = R_hat[-var_to_remove_all, -var_to_remove_all] %>% `rownames<-`(setdiff(country_variab_order, y_df$ref[var_to_remove_all])) %>% `colnames<-`(setdiff(country_variab_order, y_df$ref[var_to_remove_all]))
-        C_hat_work = C_hat_remov
-        R_hat_work = R_hat_remov
-      } else {
-        y_mat_work = y_mat
-        C_hat_work = C_hat
-        R_hat_work = R_hat
-        C_hat_remov = R_hat_remov = NULL
-        stop = 1
-      }
-      # fit Kalman
-      if (kalm_Q_hat_mode == 'from VAR'){
-        HHt_work = Q_hat
-      } else if (kalm_Q_hat_mode == 'identity'){
-        HHt_work = diag(1, ncol(factor_work))
-      } else {
-        HHt_work = diag(1, ncol(factor_work))
-        cat('##########################  please enter valid entry for kalm_Q_hat_mode - identity has been selected by default')
-      }
-      cat('\n  Trying loop:', while_count, '/', max_kalman_loop)
-      outp = capture.output(
-        kalm_fit <- fkf(
-          a0 = factor_work[1,],
-          P0 = cor(factor_work),
-          dt = matrix(0, nrow = ncol(factor_work)),
-          ct = matrix(0, nrow = nrow(y_mat_work)),
-          Tt = A_hat,
-          Zt = C_hat_work,
-          HHt = HHt_work,
-          GGt = R_hat_work,
-          yt = y_mat_work,
-          check.input = T
-        ),
-        type = 'output')
-      # check for convergence error in Kalman
-      if (sum(kalm_fit$status) > 0){
-        var_to_remove_add = unique(rownames(C_hat_work)[kalm_fit$status])
-        var_to_remove_all = c(var_to_remove_all, match(var_to_remove_add, y_df$ref))
-        cat('\n         - error dpotri:', kalm_fit$status[1], '  error dpotrf:', kalm_fit$status[2],
-            ' --  additionally removing:', paste0(var_to_remove_add, collapse = ","), ' --   observations MAE:', mean(abs(kalm_fit$vt), na.rm=T),
-            ' --  Done in', round((as.numeric(Sys.time())-as.numeric(loop_start_time)) / 60), 'mins')
-      } else {
-        stop = 1
-      }
-      while_count = while_count + 1
-    } # while
-    if(length(var_to_remove_all) > 0){
-      var_to_remove_lab = paste0(y_df$ref[var_to_remove_all], collapse = ' | ')
+    
+    A_hat = VAR_fit$A[[1]]
+    A_sparseness = sum(A_hat!=0) / prod(dim(A_hat))
+    Q_hat = VAR_fit$sigma
+    VAR_RMSE = sqrt(mean(VAR_fit$residuals ^ 2))
+    VAR_CV_RMSE = sqrt(VAR_fit$mse)
+    VAR_CV_RMSE_SD = sqrt(VAR_fit$mseSD)
+    VAR_MAPE_list = VAR_fit$residuals %>%
+      `rownames<-`(year_order) %>%
+      as.table() %>%
+      as.data.frame(stringsAsFactors = F) %>%
+      setNames(c('year', 'variable', 'residual')) %>%
+      left_join(VAR_fit$series %>%
+                  `rownames<-`(year_order) %>%
+                  as.table() %>%
+                  as.data.frame(stringsAsFactors = F) %>%
+                  setNames(c('year', 'variable', 'original')),
+                by = c("year", "variable")) %>%
+      filter(abs(original) > .Machine$double.eps) %>%
+      mutate(MAPE = abs(residual / original)) %>%
+      arrange(desc(MAPE))
+    VAR_MAPE = mean(VAR_MAPE_list$MAPE)
+    VAR_MAPE_max = VAR_MAPE_list$MAPE[1]
+    VAR_MAPE_95 = mean((VAR_MAPE_list %>% filter(row_number() > ceiling(0.05 * nrow(VAR_MAPE_list))))$MAPE)
+    VAR_MAPE_99 = mean((VAR_MAPE_list %>% filter(row_number() > ceiling(0.01 * nrow(VAR_MAPE_list))))$MAPE)
+    res_DFM_MAPE = res_DFM_MAPE %>% bind_rows(
+      VAR_MAPE_list %>%
+        filter(row_number() < ceiling(0.05 * nrow(VAR_MAPE_list))) %>%
+        mutate(method = recov_met,
+               data = df_type,
+               Total_Factors = n_factor,
+               algo = 'VAR') %>%
+        select(algo, Total_Factors, everything())
+    )
+    
+    # create C* as block diagonal matrix
+    list_work_C = list_work_R = list()
+    lc = 1
+    for (con in country_order){
+      list_work_C[[lc]] = data.frame(variable = variable_order, stringsAsFactors = F) %>%
+        left_join(
+          loading_work %>%
+            filter(country == con) %>%
+            select(variable, Factor, loading) %>%
+            spread(Factor, loading),
+          by = "variable") %>%
+        select(-variable) %>%
+        select(all_of(1:n_factor)) %>%
+        as.matrix()
+      
+      list_work_R[[lc]] = res_DFM_list[[df_type]][[recov_met]][['DFM_univar']][[paste0(n_factor, '_factors')]][[con]][['R']]
+      lc = lc + 1
     }
-    if (length(var_to_remove_all) != length(var_to_remove_const)){
-      cat('\n\n     *** removed for Kalman convergence:')
-      cat(paste0('\n         ',y_df$ref[setdiff(var_to_remove_all, var_to_remove_const)]))
+    
+    C_hat = bdiag(list_work_C) %>% as.matrix()
+    R_hat = bdiag(list_work_R) %>% as.matrix()
+    
+    # perform Kalman Filter to filter x_t with A* and C*
+    
+    # check for constant value -> remove yt from Kalman filter
+    var_to_remove_const = c()
+    if (sum(!is.finite(y_mat)) > 0){
+      var_to_remove_const = which(apply(y_mat, 1, function(x) sum(!is.finite(x))) > 0)
     }
-    cat('\n  Done in', round((as.numeric(Sys.time())-as.numeric(start_time)) / 60), 'mins \n')
+    var_to_remove_const = c(var_to_remove_const, which(apply(y_mat, 1, function(x) uniqueN(x)) == 1)) %>% unique() %>% sort()
+    
+    # loop Kalman Filter untill convergence
+    cat('\n** evaluating Kalman Filter...\n')
+    if (multiv_reload_Kalm & !is.null(reload_check)){
+      kalm_fit = reload_check[['kalm_fit']]
+      C_hat_remov = R_hat_remov = c()
+      y_mat_work = reload_check[['kalm_y_mat_work']]
+      var_to_remove_all = reload_check[['var_to_remove_all']]
+      var_to_remove_lab = reload_check[['var_to_remove_lab']]
+      while_count = reload_check[['while_count']]
+      cat('    Reloaded \n')
+    } else {
+      start_time = Sys.time()
+      var_to_remove_lab = ''
+      if (length(var_to_remove_const) > 0){
+        var_to_remove_all = var_to_remove_const
+        cat('\n     *** removed for constant values (', length(var_to_remove_all), '):\n         ')
+        cat(paste0(y_df$ref[var_to_remove_const], sep = ','))
+      } else {
+        var_to_remove_all = c()
+      }
+      stop = 0
+      while_count = 1
+      while (stop == 0 & while_count <= max_kalman_loop){
+        loop_start_time = Sys.time()
+        # check variables to remove
+        if (length(var_to_remove_all) > 0){
+          y_mat_work = y_mat[-var_to_remove_all, ] %>% `rownames<-`(setdiff(country_variab_order, y_df$ref[var_to_remove_all]))
+          C_hat_remov = C_hat[-var_to_remove_all, ] %>% `rownames<-`(setdiff(country_variab_order, y_df$ref[var_to_remove_all])) %>% `colnames<-`(country_fact_order)
+          R_hat_remov = R_hat[-var_to_remove_all, -var_to_remove_all] %>% `rownames<-`(setdiff(country_variab_order, y_df$ref[var_to_remove_all])) %>% `colnames<-`(setdiff(country_variab_order, y_df$ref[var_to_remove_all]))
+          C_hat_work = C_hat_remov
+          R_hat_work = R_hat_remov
+        } else {
+          y_mat_work = y_mat
+          C_hat_work = C_hat
+          R_hat_work = R_hat
+          C_hat_remov = R_hat_remov = NULL
+          stop = 1
+        }
+        # fit Kalman
+        if (kalm_Q_hat_mode == 'from VAR'){
+          HHt_work = Q_hat
+        } else if (kalm_Q_hat_mode == 'identity'){
+          HHt_work = diag(1, ncol(factor_work))
+        } else {
+          HHt_work = diag(1, ncol(factor_work))
+          cat('##########################  please enter valid entry for kalm_Q_hat_mode - identity has been selected by default')
+        }
+        cat('\n  Trying loop:', while_count, '/', max_kalman_loop)
+        outp = capture.output(
+          kalm_fit <- fkf(
+            a0 = factor_work[1,],
+            P0 = cor(factor_work),
+            dt = matrix(0, nrow = ncol(factor_work)),
+            ct = matrix(0, nrow = nrow(y_mat_work)),
+            Tt = A_hat,
+            Zt = C_hat_work,
+            HHt = HHt_work,
+            GGt = R_hat_work,
+            yt = y_mat_work,
+            check.input = T
+          ),
+          type = 'output')
+        # check for convergence error in Kalman
+        if (sum(kalm_fit$status) > 0){
+          var_to_remove_add = unique(rownames(C_hat_work)[kalm_fit$status])
+          var_to_remove_all = c(var_to_remove_all, match(var_to_remove_add, y_df$ref))
+          cat('\n         - error dpotri:', kalm_fit$status[1], '  error dpotrf:', kalm_fit$status[2],
+              ' --  additionally removing:', paste0(var_to_remove_add, collapse = ","), ' --   observations MAE:', mean(abs(kalm_fit$vt), na.rm=T),
+              ' --  Done in', round((as.numeric(Sys.time())-as.numeric(loop_start_time)) / 60), 'mins')
+        } else {
+          stop = 1
+        }
+        while_count = while_count + 1
+      } # while
+      if(length(var_to_remove_all) > 0){
+        var_to_remove_lab = paste0(y_df$ref[var_to_remove_all], collapse = ' | ')
+      }
+      if (length(var_to_remove_all) != length(var_to_remove_const)){
+        cat('\n\n     *** removed for Kalman convergence:')
+        cat(paste0('\n         ',y_df$ref[setdiff(var_to_remove_all, var_to_remove_const)]))
+      }
+      cat('\n  Done in', round((as.numeric(Sys.time())-as.numeric(start_time)) / 60), 'mins \n')
+    }
+  }
+  
+  ####### multivar_mode == 'DFM_multivar_stacked'
+  
+  if (multivar_mode == 'DFM_multivar_stacked'){
+    while_count = A_sparseness = VAR_RMSE = VAR_MAPE_max = VAR_MAPE = VAR_MAPE_99 = VAR_MAPE_95 = VAR_CV_RMSE = VAR_CV_RMSE_SD  = NA
+    var_to_remove_all = c()
+    var_to_remove_lab = ''
+    y_mat_work = y_mat
+    kalm_fit = list(status = 9999, logLik = NA)
+    # now the if (sum(kalm_fit$status) > 0) will start and the factors will be simply stacked
   }
   
   if (sum(kalm_fit$status) > 0){
-    cat('\n\n###########  Kalman filter did not converge - using factors and residuals (for RSS) from univariate DFMs')
+    if (multivar_mode == 'DFM_multivar'){
+      cat('\n\n###########  Kalman filter did not converge after', while_count - 1, 'iteration - using factors and residuals (for RSS) from univariate DFMs')}
     
     kalm_filter_factors = factor_work
     kalm_filter_observ_error = c()
@@ -1816,7 +1841,7 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
           rbind(RSS_val)
       }
     }
-    err_code = paste0(country_variab_order[kalm_fit$status], collapse = ' | ')
+    err_code = paste0('STACKED UNIVAR used - ', paste0(country_variab_order[kalm_fit$status], collapse = ' | '))
   } else {
     err_code = ''
     kalm_filter_factors = t(kalm_fit$att)
@@ -1903,7 +1928,7 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
   
   # save results
   res_DFM_stats = res_DFM_stats %>% bind_rows(
-    data.frame(DFM = 'DFM_multivar',
+    data.frame(DFM = multivar_mode,
                method = recov_met,
                data = df_type,
                Total_Factors = n_factor,
@@ -1949,7 +1974,8 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
     res_DFM_stats = res_DFM_stats %>% select(AICc, LogLik, starts_with('kalm_x_test'), everything())
   }
   
-  res_DFM_list[[df_type]][[recov_met]][['DFM_multivar']][[paste0(n_factor, '_factors')]][['All']] = list(
+  if (multivar_mode == 'DFM_multivar'){
+  res_DFM_list[[df_type]][[recov_met]][[multivar_mode]][[paste0(n_factor, '_factors')]][['All']] = list(
     factors = kalm_filter_factors %>% `rownames<-`(year_order) %>% `colnames<-`(country_fact_order),
     A_hat = A_hat %>% `rownames<-`(country_fact_order) %>% `colnames<-`(country_fact_order),
     C_hat = C_hat %>% `rownames<-`(country_variab_order) %>% `colnames<-`(country_fact_order),
@@ -1959,8 +1985,17 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
     R_hat_remov = R_hat_remov,
     VAR_fit = VAR_fit,
     kalm_fit = kalm_fit,
-    kalm_y_mat_work = y_mat_work
+    kalm_y_mat_work = y_mat_work,
+    var_to_remove_all = var_to_remove_all,
+    var_to_remove_lab = var_to_remove_lab,
+    while_count = while_count
   )
+  } else {
+    res_DFM_list[[df_type]][[recov_met]][[multivar_mode]][[paste0(n_factor, '_factors')]][['All']] = list(
+      factors = kalm_filter_factors %>% `rownames<-`(year_order) %>% `colnames<-`(country_fact_order),
+      kalm_y_mat_work = y_mat_work
+      )
+  }
   
   res_DFM_factors = res_DFM_factors %>% bind_rows(
     kalm_filter_factors %>%
@@ -1977,12 +2012,12 @@ evaluate_DFM_multivar = function(res_DFM_factors, res_DFM_loadings, res_DFM_stat
              data = df_type,
              Total_Factors = n_factor,
              Var_removed = var_to_remove_lab,
-             DFM = 'DFM_multivar') %>%
+             DFM = multivar_mode) %>%
       select(DFM, country, Total_Factors, Factor, everything())
   )
   
   res_DFM_loadings = res_DFM_loadings %>% bind_rows(
-    loading_work %>% mutate(DFM = 'DFM_multivar')
+    loading_work %>% mutate(DFM = multivar_mode)
   )
   
   return(list(

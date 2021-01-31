@@ -1180,6 +1180,7 @@ n_factor_tot = 1  # number of factors to evaluate (all incremental sets up to n_
 VAR_alpha = 0.2  # sparseness parameter for multi-country VAR
 kalm_Q_hat_mode = 'identity'  # which covariance matrix to use for states (factors) in Kalman filtering, 'from VAR' or 'identity'
 univ_reload = T  # reload previous evaluation (if available) for evaluate_DFM_univar
+multiv_reload_Kalm = F  # reload previous evaluation (if available) for evaluate_DFM_multivar
 univ_save = F  # save intermediate evaluation
 total_save = T  # save RDS for univariate + multivariate for each pair df_type + recov_met
 {
@@ -1254,8 +1255,24 @@ total_save = T  # save RDS for univariate + multivariate for each pair df_type +
         DFM_multi = evaluate_DFM_multivar(res_DFM_factors, res_DFM_loadings, res_DFM_stats, res_DFM_list, res_DFM_MAPE,
                                           df_SP_orig, df_type, recov_met, n_factor,
                                           VAR_alpha = VAR_alpha,
+                                          kalm_Q_hat_mode = kalm_Q_hat_mode, max_kalman_loop = 100,
+                                          multiv_reload_Kalm = multiv_reload_Kalm, res_DFM_list_reload = res_DFM_list_reload,
+                                          multivar_mode = 'DFM_multivar')
+        res_DFM_stats = DFM_multi$res_DFM_stats
+        res_DFM_list = DFM_multi$res_DFM_list
+        res_DFM_factors = DFM_multi$res_DFM_factors
+        res_DFM_loadings = DFM_multi$res_DFM_loadings
+        res_DFM_MAPE = DFM_multi$res_DFM_MAPE
+        
+        # stack univariate DFM (factors are standardized)
+        cat('\n\n\n  --------------------------------- Stacking Univariate DFM with', n_factor, ifelse(n_factor == 1, 'factor', 'factors') ,'models   ---------------------------------\n\n')
+        
+        DFM_multi = evaluate_DFM_multivar(res_DFM_factors, res_DFM_loadings, res_DFM_stats, res_DFM_list, res_DFM_MAPE,
+                                          df_SP_orig, df_type, recov_met, n_factor,
+                                          VAR_alpha = VAR_alpha,
                                           kalm_Q_hat_mode = kalm_Q_hat_mode,
-                                          multiv_reload_Kalm = T, res_DFM_list_reload = res_DFM_list_reload)
+                                          res_DFM_list_reload = res_DFM_list_reload,
+                                          multivar_mode = 'DFM_multivar_stacked')
         res_DFM_stats = DFM_multi$res_DFM_stats
         res_DFM_list = DFM_multi$res_DFM_list
         res_DFM_factors = DFM_multi$res_DFM_factors
@@ -1325,7 +1342,7 @@ res_DFM_MAPE = readRDS(paste0('./Checkpoints/res_DFM_MAPE_', gsub(' ', '', kalm_
 
 
 
-dfm_met_to_plot = c("DFM_multivar")
+dfm_met_to_plot = c("DFM_multivar_stacked")
 
 
 ### evaluate DFM final index based on Factors
@@ -1425,13 +1442,53 @@ kalm_Q_hat_mode = 'identity'  # which covariance matrix to use for states (facto
 }
 
 
+### plot loading ranking for selected method, df_type, recov_met
+df_type = "Restricted"
+recov_met = "SOFT_IMPUTE"
+DFM_met = "DFM_multivar"
+n_factor = 1
+{
+  # loading_table = res_DFM_loadings %>%
+  #   filter(data == df_type) %>%
+  #   filter(method == recov_met) %>%
+  #   filter(DFM == DFM_met) %>%
+  #   filter(Factor == n_factor) %>%
+  #   group_by(variable) %>%
+  #   summarize(loading = mean(loading), .groups = "drop") %>%
+  #   arrange(desc(abs(loading))) %>%
+  #   left_join(read.csv("Variable_description_Restricted_Dataset.csv", sep=";", stringsAsFactors=FALSE), by = c("variable" = "var")) %>%
+  #   setNames(c('Variable', 'Loading', 'Description')) %>%
+  #   mutate(xaxis = 1:n()*2)
+  # loading_table$Variable = factor(loading_table$Variable, levels = rev(loading_table$Variable))
+  # 
+  # p = ggplot(data=loading_table, aes(x=Loading, y=Variable)) +
+  #   geom_bar(stat="identity") +
+  #   theme(plot.margin = unit(c(1,40,1,1), "lines"),
+  #         axis.text.x = element_text(size = 15),
+  #         axis.text.y = element_text(size = 15),
+  #         axis.title = element_text(size = 17, face = 'bold'))
+  # for (i in 1:nrow(loading_table))  {
+  #   p <- p + annotation_custom(
+  #     grob = textGrob(label = rev(loading_table$Description)[i], hjust = 0, gp = gpar(cex = 1.5)),
+  #     ymin = i,      # Vertical position of the textGrob
+  #     ymax = i,
+  #     xmin = max(loading_table$Loading)*1.3,         # Note: The grobs are positioned outside the plot area
+  #     xmax = max(loading_table$Loading)*1.3)
+  # }
+  # gt <- ggplot_gtable(ggplot_build(p))
+  # gt$layout$clip[gt$layout$name == "panel"] <- "off"
+  # png(paste0('pp.png'), width = 20, height = 10, units = 'in', res=300)
+  # grid.draw(gt)
+  # dev.off()
+}
+
 
 
 
 df_type_to_keep = c("RestrictedDifference", "Restricted")
 recov_met_to_keep = c("SOFT_IMPUTE")
 PCA_to_keep = c('RobPCA')
-DFM_to_keep = c('DFM_multivar')
+DFM_to_keep = c('DFM_multivar', 'DFM_multivar_stacked')
 
 
 ### plot comparison of index evolution over time for all methods
@@ -1443,7 +1500,8 @@ res_DFM_factors = readRDS(paste0('./Checkpoints/res_DFM_factors_', gsub(' ', '',
 res_DFM_loadings = readRDS(paste0('./Checkpoints/res_DFM_loadings_', gsub(' ', '', kalm_Q_hat_mode), '_', VAR_alpha, '.rds'))
 res_DFM_best_model = readRDS(paste0('./Checkpoints/res_DFM_best_model_', gsub(' ', '', kalm_Q_hat_mode), '_', VAR_alpha, '.rds'))
 res_index_DFM = readRDS('./Checkpoints/res_index_DFM.rds')
-algo_to_plot = c('RobPCA', 'DFM_multivar')
+algo_to_plot = c('RobPCA', 'DFM_multivar', 'DFM_multivar_stacked')
+index_to_keep = 1  #  index dimension to keep 
 {
   # create single list of evaluated index (raw scores)
   res_ALL_scores = c()
@@ -1516,6 +1574,10 @@ algo_to_plot = c('RobPCA', 'DFM_multivar')
     } # recov_met
   } # df_type
   
+  # select number of index
+  res_ALL_scores = res_ALL_scores %>%
+    filter(factor <= index_to_keep)
+  
   # plot for each country
   for (df_type in unique(res_ALL_scores$data)){
     for (recov_met in unique(res_ALL_scores$method)){
@@ -1572,8 +1634,8 @@ res_ALL_scores = readRDS('./Checkpoints/res_ALL_scores.rds')
 
 ### plot variation coefficient over time
 res_ALL_scores = readRDS('./Checkpoints/res_ALL_scores.rds')
-algo_to_plot = c('RobPCA', 'DFM_multivar')
-algo_to_plot_lab = c('RobPCA', 'DFM')
+algo_to_plot = c('RobPCA', 'DFM_multivar', 'DFM_multivar_stacked')
+algo_to_plot_lab = c('RobPCA', 'DFM', 'DFM stacked')   # same length of algo_to_plot
 {
   for (df_type in unique(res_ALL_scores$data)){
     for (recov_met in unique(res_ALL_scores$method)){
@@ -1585,10 +1647,11 @@ algo_to_plot_lab = c('RobPCA', 'DFM')
         mutate(factor = paste('Index', factor)) %>%
         group_by(algo, factor, country) %>%
         # filter(factor == max(factor)) %>%
-        mutate(index = index + min(index)) %>%  # in order to make all values positive andd avoid 0 mean
+        mutate(index = index + min(index)) %>%  # in order to make all values positive and avoid 0 mean
         summarise(Variation_coeff = sd(index) / abs(mean(index)), .groups = 'drop') %>%
         mutate(quantile = quantile(Variation_coeff, 0.90)) %>%
         ungroup() %>%
+        left_join(res_ALL_scores %>% select(algo, family) %>% unique(), by = "algo") %>%
         left_join(data.frame(old = algo_to_plot, new = algo_to_plot_lab, stringsAsFactors = F), by = c('algo' = 'old')) %>%
         select(-algo) %>%
         rename(algo = new) %>%
@@ -1596,7 +1659,7 @@ algo_to_plot_lab = c('RobPCA', 'DFM')
       
       png(paste0('./Results/2_', df_type, '_', recov_met, '_factors_variation_coeff.png'), width = 10, height = 10, units = 'in', res=300) 
       plot(ggplot(data,
-                  aes(x=algo, y=Variation_coeff, color=algo)) +
+                  aes(x=algo, y=Variation_coeff, color=family)) +
              geom_boxplot(lwd=1.5) +
              scale_x_discrete(limits=sort(algo_to_plot_lab)) +
              scale_color_manual(values=c("blue3", "brown", "chartreuse4")) +
