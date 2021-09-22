@@ -144,7 +144,8 @@ model_settings = function(task, flag_tuning, save_all, algo_type_work, tuning_st
                         nfolds = max(c(3, inn_cross_val_fold)),
                         standardize = T,   # already standardized in model.feature
                         s = "lambda.1se",  # keep this fixed because the code substitute lambda.1se with chosen lambda.opt
-                        type.measure = "mse")
+                        type.measure = "mse",
+                        type.gaussian = "covariance")
           
           # tuned parameters
           params = c(params)
@@ -154,11 +155,13 @@ model_settings = function(task, flag_tuning, save_all, algo_type_work, tuning_st
           n_obs = nrow(task$env$data)
           if (tuning_strategy == 'grid'){
             param.set = makeParamSet(
-              makeDiscreteParam("alpha", values = seq(0, 1, by = 0.1))
+              makeDiscreteParam("alpha", values = seq(0, 1, by = 0.1)),
+              makeDiscreteParam("type.gaussian", values = c("covariance", "naive"))
             )
           } else if (tuning_strategy == 'bayes'){
             param_set = makeParamSet(
-              makeNumericParam("alpha", 0, 1)
+              makeNumericParam("alpha", 0, 1),
+              makeDiscreteParam("type.gaussian", values = c("covariance", "naive"))
             )
           }
         }
@@ -209,7 +212,7 @@ model_settings = function(task, flag_tuning, save_all, algo_type_work, tuning_st
           params = c(params,
                      cost = 1,
                      gamma = 1,
-                     coef0 = 1,
+                     coef0 = 0,
                      degree = 1)
           
           # parameters space
@@ -220,15 +223,15 @@ model_settings = function(task, flag_tuning, save_all, algo_type_work, tuning_st
             param.set = makeParamSet(
               makeDiscreteParam("cost", c(0.0001, 0.001, 0.01, 0.1, 1, 10, 25, 50, 100)),
               makeDiscreteParam("gamma", c(0.00001, 0.0001, 0.001, 0.01, 0.1, 1, 1 / n_var), 1 / (n_var * data_variance)),
-              makeDiscreteParam("coef0", c(-50, -10, 1, 10, 50)),
-              makeDiscreteParam("degree", c(2, 3, 4, 5))
+              # makeDiscreteParam("coef0", c(-1, -0.1, -0.01, 0, 0.01, 0.1, 1)),
+              makeDiscreteParam("degree", c(2, 3))
             )
           } else if (tuning_strategy == 'bayes'){
             param_set = makeParamSet(
               makeNumericParam("cost", 0.0001, 100),
               makeNumericParam("gamma", 0.0001, 10),
-              makeIntegerParam("coef0", -50, 50),
-              makeIntegerParam("degree", 2, 5)
+              # makeNumericParam("coef0", -1, 1),
+              makeIntegerParam("degree", 2, 3)
             )
           }
         }
@@ -274,9 +277,10 @@ model_settings = function(task, flag_tuning, save_all, algo_type_work, tuning_st
           learner_type = "regr.nnet"
           
           # settings
-          params = list(maxit = 1000,
+          params = list(maxit = 200,
                         skip = T,
-                        MaxNWts = 5000)
+                        MaxNWts = 5000,
+                        trace = F)
           
           # tuned parameters
           params = c(params,
@@ -294,9 +298,98 @@ model_settings = function(task, flag_tuning, save_all, algo_type_work, tuning_st
             )
           } else if (tuning_strategy == 'bayes'){
             param_set = makeParamSet(
-              makeIntegerParam("size", 1, ifelse(n_var > 1, round(n_var / 2), 1)),
+              makeIntegerParam("size", 1, ifelse(n_var > 1, round(n_var *0.8), 1)),
               # makeDiscreteParam("skip", c(TRUE, FALSE)),
               makeNumericParam("decay", 0, 10)
+            )
+          }
+        }
+      }
+      
+      ### Fully Connected Neural Network
+      {
+        if (algo_type_work == "FCNN"){
+          learner_type = "regr.h2o.deeplearning"
+          
+          # settings
+          params = list(seed = 66,
+                        epochs = 30,
+                        adaptive_rate = T,
+                        stopping_rounds = 5,
+                        stopping_metric = "AUTO",
+                        fast_mode = T)   #quiet_mode
+          
+          # tuned parameters
+          params = c(params,
+                     list(loss = "Quadratic",
+                          hidden = c(100, 100)))
+          
+          # parameters space
+          n_var = ncol(task$env$data) - 1
+          n_obs = nrow(task$env$data)
+          if (tuning_strategy == 'grid'){
+            param.set = makeParamSet(
+            )
+          } else if (tuning_strategy == 'bayes'){
+            param_set = makeParamSet(
+              makeDiscreteParam("loss", c("Quadratic", "Automatic")),
+              makeIntegerVectorParam("hidden", len = 2, lower = 1, upper = n_var)#, trafo = function(x) x[x != 0])
+            )
+          }
+        }
+      }
+      
+      ### Spline regression
+      {
+        if (algo_type_work == "Spline"){
+          learner_type = "regr.crs"
+          
+          # settings
+          n_var = ncol(task$env$data) - 1
+          params = list(random.seed = 66,
+                        segments = rep(1, n_var),
+                        complexity = "degree-knots")
+          
+          # tuned parameters
+          params = c(params,
+                     list(degree = rep(2, n_var)))
+          
+          # parameters space
+          
+          if (tuning_strategy == 'grid'){
+            param.set = makeParamSet(
+            )
+          } else if (tuning_strategy == 'bayes'){
+            param_set = makeParamSet(
+              makeIntegerVectorParam("degree", len = n_var, lower = 1, upper = 2)
+            )
+          }
+        }
+      }
+      
+      ### MARS Multivariate Adaptive Regression Splines
+      {
+        if (algo_type_work == "MARS"){
+          learner_type = "regr.earth"
+          
+          # settings
+          n_var = ncol(task$env$data) - 1
+          params = list(trace = 0,
+                        nk = min(200, max(20, 2 * n_var)) + 1,
+                        nfold = 0)
+          
+          # tuned parameters
+          params = c(params,
+                     list(degree = 2))
+          
+          # parameters space
+          
+          if (tuning_strategy == 'grid'){
+            param.set = makeParamSet(makeIntegerParam("degree", 1, 3)
+            )
+          } else if (tuning_strategy == 'bayes'){
+            param_set = makeParamSet(
+              makeIntegerParam("degree", 1, 3)
             )
           }
         }
@@ -380,6 +473,10 @@ model_tuning = function(algo_type_work, tuning_strategy, learner, task, param_se
   
   # get tuning results
   res_summ = getNestedTuneResultsOptPathDf(res)
+  if (algo_type_work == "FCNN"){    # todo: per i parametri vettoriali bisognerebbe fare un controllo a parte, anche per la parte sotto dove applichi il tipo
+    res_summ = res_summ %>%         #       e anche nell'applicazione dei parametri nell'addestrare i modelli
+      unite("hidden", starts_with("hidden"), remove = T, sep = ",")
+  }
   colnames(res_summ) = gsub(paste0(tuning_criterion, "."), "", colnames(res_summ))
   res_summ_avg = res_summ %>%
     rename_at(vars(contains(tuning_criterion)), funs(sub(tuning_criterion, 'mean', .))) %>%  # added for rmse
@@ -393,54 +490,90 @@ model_tuning = function(algo_type_work, tuning_strategy, learner, task, param_se
                       "train.mean_mean", "test.sd_mean", "test.mean_min", "test.mean_max",
                       "train.sd_mean", "train.mean_min", "train.mean_max")) %>%
     mutate_at(.vars = par_names, .funs = as.character)
-  for (p in names(par_type)){
-    res_summ_avg = res_summ_avg %>% mutate_at(.vars = p, .funs = funs(!!paste0("as.", par_type[p])))
+  if (algo_type_work != "FCNN"){
+    for (p in names(par_type)){
+      res_summ_avg = res_summ_avg %>% mutate_at(.vars = p, .funs = funs(!!paste0("as.", par_type[p])))
+    }
   }
   
   # add performance on full set
   if (algo_type_work == "ElasticNet"){
     res_summ_avg_t = c()
   }
-  for (i in c(1:nrow(res_summ_avg))){
+  if (algo_type_work == "FCNN"){
     params_t = learner$par.vals
-    params_t[names(param_set$pars)] = as.list(res_summ_avg[i, par_names])
     
-    learner_t = makeLearner(cl = learner$id,
-                            par.vals = params_t,
-                            predict.type = 'response',
-                            fix.factors.prediction = T)
-    
-    model_t = train(learner_t, task)
-    if (algo_type_work != "ElasticNet"){
-      prediction_t = predict(model_t, task = task)
-      res_summ_avg$FULL_SET_PERF[i] = performance(prediction_t, eval(parse(text=tuning_criterion)))
-    } else {
-      cv_res = model_t$learner.model$cvm   # get cv-performance metric for each lamba tested
-      for (ll in 1:length(cv_res)){
-        lam = model_t$learner.model$lambda[ll]   # get corresponding lambdas
-        model_t$learner.model$lambda.1se = lam
+    # hidden_model_list = res_summ %>%    # needed to reload trained model ?
+    #   group_by(iter) %>%
+    #   arrange(dob) %>%
+    #   filter(row_number() == n()) %>%
+    #   group_by(hidden) %>%
+    #   filter(row_number() == 1)
+    # res_summ_avg = res_summ_avg %>%
+    #   left_join(hidden_model_list %>% select(hidden, iter), by = "hidden") %>%
+    #   filter(!is.na(iter))
+    for (i in 1:nrow(res_summ_avg)){
+      hidden_vector = strsplit(res_summ_avg[i, 'hidden'] %>% unlist(), ',')[[1]] %>% as.numeric() %>% as.vector()
+      hidden_vector = hidden_vector[hidden_vector != 0]
+      params_t[['hidden']] = hidden_vector
+      params_t['quiet_mode'] = T
+      if (length(params_t[['hidden']]) > 0 ){
+        learner_t = makeLearner(cl = learner$id,
+                                par.vals = params_t,
+                                predict.type = 'response',
+                                fix.factors.prediction = T)
+        oo = capture.output(model_t <- train(learner_t, task), silent = T)
+        oo = capture.output(prediction_t <- predict(model_t, task = task), silent = T)
+        res_summ_avg$FULL_SET_PERF[i] = performance(prediction_t, eval(parse(text=tuning_criterion)))
+      } else {
+        res_summ_avg$FULL_SET_PERF[i] = NA
+      }
+    }
+    res_summ_avg = res_summ_avg %>%
+      filter(!is.na(FULL_SET_PERF))
+  } else {
+    for (i in c(1:nrow(res_summ_avg))){
+      params_t = learner$par.vals
+      
+      params_t[names(param_set$pars)] = as.list(res_summ_avg[i, par_names])
+      
+      learner_t = makeLearner(cl = learner$id,
+                              par.vals = params_t,
+                              predict.type = 'response',
+                              fix.factors.prediction = T)
+      
+      model_t = train(learner_t, task)
+      if (algo_type_work != "ElasticNet"){
         prediction_t = predict(model_t, task = task)
-        res_summ_avg_t = res_summ_avg_t %>%
-          bind_rows(
-            res_summ_avg[i, ] %>%
-              mutate(lambda = lam,
-                     DELTA_TRAIN_TEST = -1,
-                     FULL_SET_PERF = as.numeric(performance(prediction_t, eval(parse(text=tuning_criterion)))),
-                     "test.mean_mean" = cv_res[i],
-                     "train.mean_mean" = cv_res[i],
-                     "test.sd_mean" = -1,
-                     "test.mean_min" = -1,
-                     "test.mean_max" = -1,
-                     "train.sd_mean" = -1,
-                     "train.mean_min" = -1,
-                     "train.mean_max" = -1)
-          )
+        res_summ_avg$FULL_SET_PERF[i] = performance(prediction_t, eval(parse(text=tuning_criterion)))
+      } else {
+        cv_res = model_t$learner.model$cvm   # get cv-performance metric for each lamba tested
+        for (ll in 1:length(cv_res)){
+          lam = model_t$learner.model$lambda[ll]   # get corresponding lambdas
+          model_t$learner.model$lambda.1se = lam
+          prediction_t = predict(model_t, task = task)
+          res_summ_avg_t = res_summ_avg_t %>%
+            bind_rows(
+              res_summ_avg[i, ] %>%
+                mutate(lambda = lam,
+                       DELTA_TRAIN_TEST = -1,
+                       FULL_SET_PERF = as.numeric(performance(prediction_t, eval(parse(text=tuning_criterion)))),
+                       "test.mean_mean" = cv_res[i],
+                       "train.mean_mean" = cv_res[i],
+                       "test.sd_mean" = -1,
+                       "test.mean_min" = -1,
+                       "test.mean_max" = -1,
+                       "train.sd_mean" = -1,
+                       "train.mean_min" = -1,
+                       "train.mean_max" = -1)
+            )
+        }
       }
     }
   }
   if (algo_type_work == "ElasticNet"){
     res_summ_avg = res_summ_avg_t %>%
-      select(alpha, lambda, everything())
+      select(alpha, type.gaussian, lambda, everything())
   }
   
   # order according to tuning_criterion optimal value
@@ -496,25 +629,38 @@ model_perf = function(algo_type_work, model, learner, task, prediction, out_cros
   # resample
   if (algo_type_work != "ElasticNet"){
     set.seed(1, "L'Ecuyer-CMRG")
-    perf = resample(learner = learner,
-                    task = task,
-                    resampling = rdesc,
-                    measures = meas,
-                    show.info = F,
-                    models = T)
+    if (algo_type_work == "FCNN"){
+      oo = capture.output(perf <- resample(learner = learner,
+                                           task = task,
+                                           resampling = rdesc,
+                                           measures = meas,
+                                           show.info = F,
+                                           models = T), silent = T)
+    } else {
+      perf = resample(learner = learner,
+                      task = task,
+                      resampling = rdesc,
+                      measures = meas,
+                      show.info = F,
+                      models = T)
+    }
     
     train_val = perf$measures.train[[tuning_criterion]]
     test_val = perf$measures.test[[tuning_criterion]]
     stat = as.data.frame(t(perf$aggr))
     
-    
-    best_par = unlist(learner$par.vals[names(param_set$pars)])
-    best_par = paste0(paste(names(best_par), best_par, sep = "="), collapse = ",")
+    if (algo_type_work == "FCNN"){
+      best_par = paste0('loss=', learner$par.vals['loss'], ',hidden=', paste0(learner$par.vals[['hidden']], collapse = ","))
+    } else {
+      best_par = unlist(learner$par.vals[names(param_set$pars)])
+      best_par = paste0(paste(names(best_par), best_par, sep = "="), collapse = ",")
+    }
   } else {
     best_lambda = model$learner.model$lambda.1se
     best_lambda_ind = which.min(abs(model$learner.model$lambda - best_lambda))
     train_val = test_val = model$learner.model$cvm[best_lambda_ind]
-    best_par = paste0("alpha=", unlist(learner$par.vals[names(param_set$pars)]), ',lambda=', best_lambda)
+    best_par = unlist(learner$par.vals[names(param_set$pars)])
+    best_par = paste0(paste0(names(best_par), "=", best_par, collapse = ","), ',lambda=', best_lambda)
     stat = data.frame(test.sd = -1, train.sd = -1)
   }
   
@@ -538,7 +684,7 @@ model_perf = function(algo_type_work, model, learner, task, prediction, out_cros
 }
 
 # wrapper for model estimation
-threshold_sensitivity_fit = function(flag_tuning, force_tuning, save_all, inn_cross_val_fold, out_cross_val_fold, tuning_criterion, tuning_strategy,
+threshold_sensitivity_fit = function(flag_tuning, force_tuning, reload_final_perf, save_all, inn_cross_val_fold, out_cross_val_fold, tuning_criterion, tuning_strategy,
                                      df_type, recov_met, fit_met, algo_type, algo_type_work, var_target, reload_out, index_1_set, index_2_set,
                                      res_thresh_sensitivity_list, res_thresh_sensitivity_best, res_thresh_sensitivity_residual,
                                      regr_to_test, index_1_thresh = NULL, index_2_thresh = NULL,
@@ -565,6 +711,7 @@ threshold_sensitivity_fit = function(flag_tuning, force_tuning, save_all, inn_cr
     regressor_lab = 'x_raw_index'
     index_1_thresh_out = index_2_thresh_out = 'None'
   }
+  suppressWarnings(parallelStop())
 
   # todo: mettere country e year? randomforest non supporta più di 53 classi
   # df_work = df_work %>%
@@ -572,7 +719,13 @@ threshold_sensitivity_fit = function(flag_tuning, force_tuning, save_all, inn_cr
   #          year = as.integer(year))
   obs_lab = df_work %>% select(country, year)
   df_work = df_work %>%
-    select(-country, -year)
+    select(-country, -year) %>%
+    mutate_all(function(x) { attributes(x) <- NULL; x })
+  if (algo_type_work %in% c("SingleNN", "FCNN", "Spline")){
+    df_work = df_work %>%
+      clever_scale(c('TARGET')) %>%
+      data.frame()
+  }
   target_var_stats = paste0(df_work$TARGET %>% mean(na.rm = T) %>% round(4), '±', df_work$TARGET %>% sd(na.rm = T) %>% round(4))
 
   # define task for outer resampling
@@ -598,12 +751,22 @@ threshold_sensitivity_fit = function(flag_tuning, force_tuning, save_all, inn_cr
                         fix.factors.prediction = T)
 
   # tune parameters and set best parameters
+  err_lab = ""
   suppressWarnings(rm(tune_res))
   if ((flag_tuning == T & reload_out[[algo_type_work]][[regressor_lab]][[tuning_criterion]]$status != 'tuned') | force_tuning){
     cat('\n           --- Tuning...')
-    tune_res = model_tuning(algo_type_work, tuning_strategy, learner, task, param_set, out_cross_val_fold, inn_cross_val_fold, tuning_criterion)
+    if (algo_type_work == "MARS"){
+      err = try(tune_res <- model_tuning(algo_type_work, tuning_strategy, learner, task, param_set, out_cross_val_fold, inn_cross_val_fold, tuning_criterion), silent = T)
+      if (class(err) == "try-error" & regr_to_test != 'original'){    # take best tuning params (degree) from original variable set
+        tune_res = reload_out[[algo_type_work]][['x_original']][[tuning_criterion]]$tuning
+        cat('\n         ############## error in fitting. Used tuning from original variables ##############')
+        err_lab = "Error in fitting. Used tuning from original variables"
+      }
+    } else {
+      tune_res = model_tuning(algo_type_work, tuning_strategy, learner, task, param_set, out_cross_val_fold, inn_cross_val_fold, tuning_criterion)
+    }
     reload_out[[algo_type_work]][[regressor_lab]][[tuning_criterion]]$status = 'tuned'
-  } else if (reload_out[[algo_type_work]][[regressor_lab]][[tuning_criterion]]$status == 'tuned'){
+    } else if (reload_out[[algo_type_work]][[regressor_lab]][[tuning_criterion]]$status == 'tuned'){
     # reload tuned list
     tune_res = reload_out[[algo_type_work]][[regressor_lab]][[tuning_criterion]]$tuning
     if (is.null(tune_res)){
@@ -615,7 +778,16 @@ threshold_sensitivity_fit = function(flag_tuning, force_tuning, save_all, inn_cr
   
   # set best parameters
   tune_res_summ = tune_res$res_summ_avg
-  params[names(param_set$pars)] = as.list(tune_res_summ[1, names(param_set$pars)])
+  if (algo_type_work == "FCNN"){
+      hidden_vector = strsplit(tune_res_summ[1, 'hidden'] %>% unlist(), ',')[[1]] %>% as.numeric() %>% as.vector()
+      hidden_vector = hidden_vector[hidden_vector != 0]
+      params[['hidden']] = hidden_vector
+      params['quiet_mode'] = T
+      params['loss'] = tune_res_summ[1, 'loss'] %>% unlist()
+  } else {
+    params[names(param_set$pars)] = as.list(tune_res_summ[1, names(param_set$pars)])
+  }
+
   learner = makeLearner(cl = learner_type,
                         par.vals = params,
                         predict.type = 'response',
@@ -623,18 +795,37 @@ threshold_sensitivity_fit = function(flag_tuning, force_tuning, save_all, inn_cr
   
   # train model
   cat('\n           --- Training final model')
-  model = train(learner, task)
+  reload_model = reload_out[[algo_type_work]][[regressor_lab]][[tuning_criterion]]$model
+  if (!is.null(reload_model) & reload_final_perf == T){
+    model = reload_model$model
+    cat('    - reloaded')
+  } else {
+    if (algo_type_work == "FCNN"){
+      oo = capture.output(model <- train(learner, task), silent = T)
+    } else {
+      model = train(learner, task)
+    }
+  }
   if (algo_type_work != "ElasticNet"){
+    if (algo_type_work == "FCNN"){
+      oo = capture.output(prediction <- predict(model, task = task), silent = T)
+    } else {
       prediction = predict(model, task = task)
+    }
   } else {
     best_lambda = tune_res_summ$lambda[1]
     model$learner.model$lambda.1se = best_lambda
     prediction = predict(model, task = task)
   }
-
+  
   # assess final performance - average only on outer cross-validation
   cat('\n           --- Assessing final performances')
-  perf_res = model_perf(algo_type_work, model, learner, task, prediction, out_cross_val_fold, inn_cross_val_fold, tuning_criterion, param_set)
+  if (!is.null(reload_model) & reload_final_perf == T){
+    perf_res = reload_model$performance
+    cat('    - reloaded')
+  } else {
+    perf_res = model_perf(algo_type_work, model, learner, task, prediction, out_cross_val_fold, inn_cross_val_fold, tuning_criterion, param_set)
+  }
   
   # store results
   res_thresh_sensitivity_list = res_thresh_sensitivity_list %>% bind_rows(
@@ -646,7 +837,8 @@ threshold_sensitivity_fit = function(flag_tuning, force_tuning, save_all, inn_cr
           regressor_type = regr_to_test,
           index_1_thresh = index_1_thresh_out,
           index_2_thresh = index_2_thresh_out,
-          algo_main = algo_type, stringsAsFactors = F),
+          algo_main = algo_type,
+          error = err_lab, stringsAsFactors = F),
           tune_res$res_summ_log %>%
             mutate(Best_params = ifelse(row_number()==1, 'YES', '')) %>%
             select(Best_params, everything()))
@@ -661,7 +853,8 @@ threshold_sensitivity_fit = function(flag_tuning, force_tuning, save_all, inn_cr
           regressor_type = regr_to_test,
           index_1_thresh = index_1_thresh_out,
           index_2_thresh = index_2_thresh_out,
-          algo_main = algo_type, stringsAsFactors = F),
+          algo_main = algo_type,
+          error = err_lab, stringsAsFactors = F),
           perf_res)
   )
   
@@ -691,6 +884,7 @@ threshold_sensitivity_fit = function(flag_tuning, force_tuning, save_all, inn_cr
     reload_out[[algo_type_work]][[regressor_lab]][[tuning_criterion]]$model = list(task = task,
                                                                                    learner = learner,
                                                                                    model = model,
+                                                                                   prediction = prediction,
                                                                                    performance = perf_res)
     cat('\n           *** exporting results:', reload_out[[algo_type_work]][[regressor_lab]][[tuning_criterion]]$status)
   }
