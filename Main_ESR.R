@@ -3469,3 +3469,23 @@ variable_description = data.frame(target_var = c('COG_mad_gdppc', 'COG_pwt_gc', 
     write.table(corr_data, './Paper/Latex_Table_Figure/09_index_correlation.csv', sep = ";", col.names = T, row.names = F, append = F)
   }
 }
+
+
+# export index
+{
+  df_type = 'Restricted'
+  recov_met = 'TENSOR_BF'
+  algo_to_plot = c('RobPCA', 'DFM_multivar_stacked')
+  res_ALL_scores = readRDS('./Checkpoints/res_ALL_scores.rds')
+  
+  index_export = res_ALL_scores %>%
+    filter(data == df_type) %>%
+    filter(method == recov_met) %>%
+    filter(algo %in% algo_to_plot) %>%
+    mutate(algo = replace(algo, algo == 'DFM_multivar_stacked', 'DFM')) %>%
+    mutate(algo = replace(algo, algo == 'RobPCA', 'PCA')) %>%
+    select(country, year, algo,index) %>%
+    arrange(algo,country, year)
+  
+  write.table(index_export, './Paper/ESR_index.csv', sep = ",", col.names = T, row.names = F, append = F)
+}
